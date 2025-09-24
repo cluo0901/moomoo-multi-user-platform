@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moomoo Trading Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .card {
+            @apply bg-white rounded-lg shadow-md p-6 mb-4;
+        }
+        .stat-card {
+            @apply bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg shadow-md p-6;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Moomoo Trading Dashboard</h1>
+            <div class="flex space-x-4">
+                <button id="refreshBtn" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+                    Refresh Data
+                </button>
+                <input type="date" id="startDate" class="border rounded px-3 py-2">
+                <input type="date" id="endDate" class="border rounded px-3 py-2">
+                <button id="filterBtn" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
+                    Filter
+                </button>
+            </div>
+        </div>
+
+        <!-- Currency Info Banner -->
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6">
+            <p class="text-sm text-blue-800">
+                💱 <strong>Multi-Currency Portfolio:</strong>
+                All amounts converted to <strong>USD</strong> using current exchange rates
+                <span class="text-xs ml-2 opacity-75">(USD, JPY, SGD → USD)</span>
+            </p>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div class="stat-card">
+                <h3 class="text-lg font-semibold mb-2">Total Trades</h3>
+                <p class="text-2xl font-bold" id="totalTrades">-</p>
+            </div>
+            <div class="stat-card">
+                <h3 class="text-lg font-semibold mb-2">Total Volume (USD)</h3>
+                <p class="text-2xl font-bold" id="totalVolume">-</p>
+            </div>
+            <div class="stat-card">
+                <h3 class="text-lg font-semibold mb-2">Current Positions</h3>
+                <p class="text-2xl font-bold" id="totalPositions">-</p>
+            </div>
+            <div class="stat-card">
+                <h3 class="text-lg font-semibold mb-2">Unrealized P&L (USD)</h3>
+                <p class="text-2xl font-bold" id="unrealizedPL">-</p>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div class="card">
+                <h3 class="text-xl font-semibold mb-4">Daily Trading Volume (USD)</h3>
+                <canvas id="volumeChart" width="400" height="200"></canvas>
+            </div>
+            <div class="card">
+                <h3 class="text-xl font-semibold mb-4">Portfolio Allocation</h3>
+                <canvas id="allocationChart" width="400" height="200"></canvas>
+            </div>
+        </div>
+
+        <!-- Tables -->
+        <div class="grid grid-cols-1 gap-6">
+            <!-- Current Positions Table (Moved to Top) -->
+            <div class="card border-l-4 border-blue-500">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-semibold text-blue-700">📊 Current Positions</h3>
+                    <button id="viewAllPositions" class="text-blue-500 hover:underline">View All</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full table-auto">
+                        <thead>
+                            <tr class="bg-blue-50">
+                                <th class="px-4 py-2 text-left">Symbol</th>
+                                <th class="px-4 py-2 text-left">Name</th>
+                                <th class="px-4 py-2 text-right">Quantity</th>
+                                <th class="px-4 py-2 text-right">Market Value</th>
+                                <th class="px-4 py-2 text-right">Unrealized P&L</th>
+                                <th class="px-4 py-2 text-right">P&L %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="positionsTable">
+                            <!-- Position rows will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Recent Trades Table -->
+            <div class="card">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-semibold">📈 Recent Trades</h3>
+                    <button id="viewAllTrades" class="text-blue-500 hover:underline">View All</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full table-auto">
+                        <thead>
+                            <tr class="bg-gray-50">
+                                <th class="px-4 py-2 text-left">Date</th>
+                                <th class="px-4 py-2 text-left">Symbol</th>
+                                <th class="px-4 py-2 text-left">Side</th>
+                                <th class="px-4 py-2 text-right">Quantity</th>
+                                <th class="px-4 py-2 text-right">Price</th>
+                                <th class="px-4 py-2 text-right">Value</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tradesTable">
+                            <!-- Trade rows will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Historical Orders Table (New) -->
+            <div class="card">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-semibold">📋 Recent Orders</h3>
+                    <button id="viewAllOrders" class="text-blue-500 hover:underline">View All</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full table-auto">
+                        <thead>
+                            <tr class="bg-gray-50">
+                                <th class="px-4 py-2 text-left">Date</th>
+                                <th class="px-4 py-2 text-left">Symbol</th>
+                                <th class="px-4 py-2 text-left">Side</th>
+                                <th class="px-4 py-2 text-left">Status</th>
+                                <th class="px-4 py-2 text-right">Quantity</th>
+                                <th class="px-4 py-2 text-right">Price</th>
+                                <th class="px-4 py-2 text-right">Filled</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ordersTable">
+                            <!-- Order rows will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div id="loadingSpinner" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden">
+        <div class="flex justify-center items-center h-full">
+            <div class="animate-spin rounded-full h-32 w-32 border-b-2 border-white"></div>
+        </div>
+    </div>
+
+    <script src="static/dashboard.js?v=3"></script>
+</body>
+</html>

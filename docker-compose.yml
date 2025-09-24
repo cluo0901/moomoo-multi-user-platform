@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  moomoo-dashboard:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_URL=sqlite:///data/moomoo_trading.db
+      - MOOMOO_HOST=host.docker.internal  # Access host machine's moomoo openD
+      - MOOMOO_PORT=11111
+      - MOOMOO_SECURITY_FIRM=FUTUSG
+      - MOOMOO_TRADE_MARKET=US
+    volumes:
+      - ./data:/app/data  # Persist database
+      - ./logs:/app/logs  # Persist logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - db-init
+
+  # Service to initialize database on first run
+  db-init:
+    build: .
+    command: python -c "from app import app, db; app.app_context().push(); db.create_all(); print('Database initialized')"
+    environment:
+      - DATABASE_URL=sqlite:///data/moomoo_trading.db
+    volumes:
+      - ./data:/app/data
+    restart: "no"
+
+volumes:
+  data:
+  logs:
