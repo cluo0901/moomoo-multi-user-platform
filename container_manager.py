@@ -1,17 +1,26 @@
 import os
-import yaml
 import time
 import secrets
-from kubernetes import client, config
-from kubernetes.client.rest import ApiException
-from datetime import datetime
 import base64
 import json
+from datetime import datetime
+
+try:
+    from kubernetes import client, config
+    from kubernetes.client.rest import ApiException
+    KUBERNETES_AVAILABLE = True
+except ImportError:
+    KUBERNETES_AVAILABLE = False
+    print("Warning: Kubernetes client not available. Container management will be disabled.")
 
 class ContainerManager:
     """Manages per-user Kubernetes deployments for OpenD containers"""
 
     def __init__(self):
+        if not KUBERNETES_AVAILABLE:
+            self.k8s_enabled = False
+            return
+
         # Load Kubernetes config
         try:
             config.load_incluster_config()  # If running in cluster

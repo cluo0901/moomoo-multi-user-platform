@@ -53,6 +53,10 @@ def missing_token_callback(error):
 def index():
     return send_from_directory(app.static_folder, 'index.html')
 
+@app.route('/auth')
+def auth():
+    return send_from_directory(app.static_folder, 'auth.html')
+
 @app.route('/api')
 def api_info():
     return jsonify({

@@ -3,13 +3,63 @@ class MoomooDashboard {
         this.baseURL = window.location.origin;
         this.volumeChart = null;
         this.allocationChart = null;
+        this.authToken = localStorage.getItem('auth_token');
+        this.userInfo = JSON.parse(localStorage.getItem('user_info') || '{}');
         this.init();
     }
 
     init() {
+        // Check authentication first
+        if (!this.authToken) {
+            window.location.href = '/static/auth.html';
+            return;
+        }
+
         this.setupEventListeners();
         this.setDefaultDates();
+        this.setupUserInfo();
         this.loadDashboard();
+    }
+
+    setupUserInfo() {
+        // Add user info to header if we have it
+        if (this.userInfo.username) {
+            const header = document.querySelector('h1');
+            if (header) {
+                header.innerHTML = `
+                    <div class="flex items-center justify-between w-full">
+                        <span>Moomoo Trading Dashboard</span>
+                        <div class="flex items-center space-x-4 text-sm">
+                            <span class="text-gray-600">Welcome, ${this.userInfo.username}</span>
+                            <button id="userMenu" class="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded-lg">
+                                Account
+                            </button>
+                            <button id="logoutBtn" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-lg">
+                                Logout
+                            </button>
+                        </div>
+                    </div>
+                `;
+
+                // Add logout functionality
+                document.getElementById('logoutBtn').addEventListener('click', () => {
+                    this.logout();
+                });
+            }
+        }
+    }
+
+    logout() {
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('user_info');
+        window.location.href = '/static/auth.html';
+    }
+
+    getAuthHeaders() {
+        return {
+            'Authorization': `Bearer ${this.authToken}`,
+            'Content-Type': 'application/json'
+        };
     }
 
     setupEventListeners() {
@@ -111,7 +161,8 @@ class MoomooDashboard {
         this.showLoading(true);
         try {
             const response = await fetch(`${this.baseURL}/api/refresh-data`, {
-                method: 'POST'
+                method: 'POST',
+                headers: this.getAuthHeaders()
             });
             const result = await response.json();
 
@@ -119,6 +170,10 @@ class MoomooDashboard {
                 alert(`Data refreshed successfully! Synced ${result.synced_counts.trades} trades, ${result.synced_counts.orders} orders, ${result.synced_counts.positions} positions.`);
                 this.loadDashboard();
             } else {
+                if (response.status === 401) {
+                    this.logout();
+                    return;
+                }
                 alert(`Error refreshing data: ${result.message || result.error}`);
             }
         } catch (error) {
@@ -157,7 +212,9 @@ class MoomooDashboard {
     async loadDashboardStats(startDate, endDate) {
         try {
             const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
-            const response = await fetch(`${this.baseURL}/api/dashboard-stats?${params}`);
+            const response = await fetch(`${this.baseURL}/api/dashboard-stats?${params}`, {
+                headers: this.getAuthHeaders()
+            });
             const data = await response.json();
 
             // Update stats cards
@@ -222,7 +279,9 @@ class MoomooDashboard {
                 end_date: endDate,
                 per_page: 10
             });
-            const response = await fetch(`${this.baseURL}/api/trades?${params}`);
+            const response = await fetch(`${this.baseURL}/api/trades?${params}`, {
+                headers: this.getAuthHeaders()
+            });
             const data = await response.json();
 
             const tbody = document.getElementById('tradesTable');
@@ -258,7 +317,9 @@ class MoomooDashboard {
                 end_date: endDate,
                 per_page: 10
             });
-            const response = await fetch(`${this.baseURL}/api/orders?${params}`);
+            const response = await fetch(`${this.baseURL}/api/orders?${params}`, {
+                headers: this.getAuthHeaders()
+            });
             const data = await response.json();
 
             const tbody = document.getElementById('ordersTable');
@@ -314,7 +375,9 @@ class MoomooDashboard {
 
     async loadCurrentPositions() {
         try {
-            const response = await fetch(`${this.baseURL}/api/positions`);
+            const response = await fetch(`${this.baseURL}/api/positions`, {
+                headers: this.getAuthHeaders()
+            });
             const data = await response.json();
 
             const tbody = document.getElementById('positionsTable');
