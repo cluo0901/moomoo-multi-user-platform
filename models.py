@@ -1,14 +1,61 @@
 from flask_sqlalchemy import SQLAlchemy
+from flask_bcrypt import Bcrypt
 from datetime import datetime
-from sqlalchemy import Index
+from sqlalchemy import Index, ForeignKey
+import secrets
 
 db = SQLAlchemy()
+bcrypt = Bcrypt()
+
+class User(db.Model):
+    __tablename__ = 'users'
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    email = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(128), nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_login = db.Column(db.DateTime)
+
+    # Container/OpenD settings
+    container_id = db.Column(db.String(100))  # Kubernetes pod/container ID
+    container_status = db.Column(db.String(20), default='inactive')  # inactive, starting, running, error
+    openapi_configured = db.Column(db.Boolean, default=False)
+    last_sync = db.Column(db.DateTime)
+
+    # Relationships
+    trades = db.relationship('Trade', backref='user', lazy='dynamic', cascade='all, delete-orphan')
+    orders = db.relationship('Order', backref='user', lazy='dynamic', cascade='all, delete-orphan')
+    positions = db.relationship('Position', backref='user', lazy='dynamic', cascade='all, delete-orphan')
+
+    def set_password(self, password):
+        """Hash and set password"""
+        self.password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
+
+    def check_password(self, password):
+        """Check if provided password matches hash"""
+        return bcrypt.check_password_hash(self.password_hash, password)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'container_status': self.container_status,
+            'openapi_configured': self.openapi_configured,
+            'last_sync': self.last_sync.isoformat() if self.last_sync else None
+        }
 
 class Trade(db.Model):
     __tablename__ = 'trades'
 
     id = db.Column(db.Integer, primary_key=True)
-    deal_id = db.Column(db.String(50), unique=True, nullable=False)
+    user_id = db.Column(db.Integer, ForeignKey('users.id'), nullable=False, index=True)
+    deal_id = db.Column(db.String(50), nullable=False, index=True)  # Changed from unique to allow multiple users with same deal_id
     code = db.Column(db.String(20), nullable=False)
     stock_name = db.Column(db.String(100))
     deal_time = db.Column(db.DateTime, nullable=False, index=True)
@@ -37,7 +84,8 @@ class Order(db.Model):
     __tablename__ = 'orders'
 
     id = db.Column(db.Integer, primary_key=True)
-    order_id = db.Column(db.String(50), unique=True, nullable=False)
+    user_id = db.Column(db.Integer, ForeignKey('users.id'), nullable=False, index=True)
+    order_id = db.Column(db.String(50), nullable=False, index=True)  # Changed from unique to allow multiple users
     code = db.Column(db.String(20), nullable=False)
     stock_name = db.Column(db.String(100))
     trd_side = db.Column(db.String(10), nullable=False)  # BUY/SELL
@@ -72,6 +120,7 @@ class Position(db.Model):
     __tablename__ = 'positions'
 
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, ForeignKey('users.id'), nullable=False, index=True)
     code = db.Column(db.String(20), nullable=False, index=True)
     stock_name = db.Column(db.String(100))
     qty = db.Column(db.Float, nullable=False)
@@ -111,6 +160,9 @@ class Position(db.Model):
         }
 
 # Add compound indexes for better query performance
-Index('idx_trades_code_time', Trade.code, Trade.deal_time)
-Index('idx_orders_code_time', Order.code, Order.create_time)
-Index('idx_positions_code_snapshot', Position.code, Position.snapshot_time)
+Index('idx_trades_user_code_time', Trade.user_id, Trade.code, Trade.deal_time)
+Index('idx_trades_user_deal_id', Trade.user_id, Trade.deal_id, unique=True)  # Unique deal_id per user
+Index('idx_orders_user_code_time', Order.user_id, Order.code, Order.create_time)
+Index('idx_orders_user_order_id', Order.user_id, Order.order_id, unique=True)  # Unique order_id per user
+Index('idx_positions_user_code_snapshot', Position.user_id, Position.code, Position.snapshot_time)
+Index('idx_positions_user_code', Position.user_id, Position.code)  # For current positions lookup

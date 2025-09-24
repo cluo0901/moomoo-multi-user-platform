@@ -1,15 +1,27 @@
 from flask import Blueprint, jsonify, request
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
 from sqlalchemy import func, desc
-from models import Trade, Order, Position, db
+from models import User, Trade, Order, Position, db
 import pandas as pd
 from currency_converter import convert_to_usd, converter
 
 api_bp = Blueprint('api', __name__)
 
+def get_current_user():
+    """Get current authenticated user"""
+    user_id = get_jwt_identity()
+    return User.query.get(user_id) if user_id else None
+
 @api_bp.route('/trades', methods=['GET'])
+@jwt_required()
 def get_trades():
     try:
+        # Get current user
+        user = get_current_user()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
         # Get query parameters
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
@@ -18,8 +30,8 @@ def get_trades():
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 100))
 
-        # Build query
-        query = Trade.query
+        # Build query filtered by user
+        query = Trade.query.filter_by(user_id=user.id)
 
         if start_date:
             start_dt = datetime.strptime(start_date, '%Y-%m-%d')
@@ -53,8 +65,14 @@ def get_trades():
         return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/orders', methods=['GET'])
+@jwt_required()
 def get_orders():
     try:
+        # Get current user
+        user = get_current_user()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
         # Get query parameters
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
@@ -63,8 +81,8 @@ def get_orders():
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 100))
 
-        # Build query
-        query = Order.query
+        # Build query filtered by user
+        query = Order.query.filter_by(user_id=user.id)
 
         if start_date:
             start_dt = datetime.strptime(start_date, '%Y-%m-%d')
@@ -98,15 +116,22 @@ def get_orders():
         return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/positions', methods=['GET'])
+@jwt_required()
 def get_positions():
     try:
-        # Get latest positions
-        latest_snapshot = db.session.query(func.max(Position.snapshot_time)).scalar()
+        # Get current user
+        user = get_current_user()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Get latest positions for this user
+        latest_snapshot = db.session.query(func.max(Position.snapshot_time)).filter_by(user_id=user.id).scalar()
 
         if not latest_snapshot:
             return jsonify({'positions': [], 'snapshot_time': None})
 
         positions = Position.query.filter(
+            Position.user_id == user.id,
             Position.snapshot_time == latest_snapshot
         ).order_by(desc(Position.market_val)).all()
 
@@ -119,8 +144,14 @@ def get_positions():
         return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/dashboard-stats', methods=['GET'])
+@jwt_required()
 def get_dashboard_stats():
     try:
+        # Get current user
+        user = get_current_user()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
 
@@ -132,8 +163,9 @@ def get_dashboard_stats():
             start_dt = datetime.strptime(start_date, '%Y-%m-%d')
             end_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
 
-        # Get trades in date range
+        # Get trades in date range for current user
         trades = Trade.query.filter(
+            Trade.user_id == user.id,
             Trade.deal_time >= start_dt,
             Trade.deal_time < end_dt
         ).all()
@@ -144,12 +176,15 @@ def get_dashboard_stats():
         buy_volume = sum(convert_to_usd(trade.val, trade.code, trade.deal_time) for trade in trades if trade.side == 'BUY')
         sell_volume = sum(convert_to_usd(trade.val, trade.code, trade.deal_time) for trade in trades if trade.side == 'SELL')
 
-        # Get current positions stats
-        latest_snapshot = db.session.query(func.max(Position.snapshot_time)).scalar()
+        # Get current positions stats for user
+        latest_snapshot = db.session.query(func.max(Position.snapshot_time)).filter_by(user_id=user.id).scalar()
         positions_stats = {'total_positions': 0, 'total_market_value': 0, 'total_unrealized_pl': 0}
 
         if latest_snapshot:
-            positions = Position.query.filter(Position.snapshot_time == latest_snapshot).all()
+            positions = Position.query.filter(
+                Position.user_id == user.id,
+                Position.snapshot_time == latest_snapshot
+            ).all()
             positions_stats = {
                 'total_positions': len(positions),
                 'total_market_value': sum(convert_to_usd(pos.market_val or 0, pos.code) for pos in positions),
@@ -157,8 +192,9 @@ def get_dashboard_stats():
                 'total_realized_pl': sum(convert_to_usd(pos.realized_pl or 0, pos.code) for pos in positions)
             }
 
-        # Daily trade volume for chart (with currency conversion)
+        # Daily trade volume for chart (with currency conversion) for user
         daily_trades = db.session.query(Trade).filter(
+            Trade.user_id == user.id,
             Trade.deal_time >= start_dt,
             Trade.deal_time < end_dt
         ).all()
@@ -198,11 +234,17 @@ def get_dashboard_stats():
         return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/currency-info', methods=['GET'])
+@jwt_required()
 def get_currency_info():
     """Get currency conversion information"""
     try:
-        # Get sample of different stock codes
-        sample_trades = Trade.query.limit(20).all()
+        # Get current user
+        user = get_current_user()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Get sample of different stock codes for this user
+        sample_trades = Trade.query.filter_by(user_id=user.id).limit(20).all()
         currency_info = {}
 
         for trade in sample_trades:
@@ -221,10 +263,37 @@ def get_currency_info():
         return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/refresh-data', methods=['POST'])
+@jwt_required()
 def refresh_data():
     try:
-        from data_sync import sync_moomoo_data
-        result = sync_moomoo_data()
+        # Get current user
+        user = get_current_user()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Check if container is configured and running
+        if not user.openapi_configured:
+            return jsonify({
+                'error': 'OpenD not configured. Please configure your moomoo credentials first.'
+            }), 400
+
+        if user.container_status not in ['running']:
+            return jsonify({
+                'error': f'Container is not running (status: {user.container_status}). Please start your container first.'
+            }), 400
+
+        # Trigger data sync in user's container
+        from container_manager import ContainerManager
+        container_mgr = ContainerManager()
+
+        result = container_mgr.trigger_data_sync(user.container_id, user.id)
+
+        if result.get('status') == 'success':
+            # Update last sync time
+            user.last_sync = datetime.utcnow()
+            db.session.commit()
+
         return jsonify(result)
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
