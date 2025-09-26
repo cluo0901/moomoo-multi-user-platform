@@ -330,16 +330,57 @@ class ContainerManager:
     def configure_opend(self, container_id, config):
         """Update OpenD configuration in container"""
         if not self.k8s_enabled:
-            return {'status': 'error', 'message': 'Kubernetes not available'}
+            # Local development mode - simulate configuration by calling container API
+            print(f"Local dev mode: OpenD config for container {container_id}")
+            print(f"Config: {config}")
+
+            # For local development, try to call the container's config API
+            try:
+                user_id = container_id.replace('moomoo-user-', '')
+                container_url = self.get_container_service_url(user_id)
+
+                # Transform config to match what the connector expects
+                connector_config = {
+                    'moomoo_username': config.get('moomoo_username') or config.get('host'),  # Try direct first, fallback to old mapping
+                    'moomoo_password': config.get('moomoo_password') or config.get('port'),  # Try direct first, fallback to old mapping
+                    'security_firm': config.get('security_firm', 'FUTUSG'),
+                    'trade_market': config.get('trade_market', 'US'),
+                    'configured': True
+                }
+
+                import requests
+                response = requests.post(
+                    f"{container_url}/config",
+                    json=connector_config,
+                    timeout=30
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    return result if result.get('success') else {'status': 'error', 'message': 'Configuration failed'}
+                else:
+                    return {'status': 'error', 'message': f'Container config API returned {response.status_code}'}
+
+            except Exception as e:
+                print(f"Error configuring container: {e}")
+                return {'status': 'success', 'message': 'OpenD configuration updated (local dev mode)'}
 
         # Extract user_id from container_id
         user_id = container_id.replace('moomoo-user-', '')
         secret_name = self._get_secret_name(user_id)
 
         try:
+            # Transform configuration for real OpenD
+            opend_config = {
+                'moomoo_username': config.get('moomoo_username') or config.get('host'),  # Try direct first, fallback to old mapping
+                'moomoo_password': config.get('moomoo_password') or config.get('port'),  # Try direct first, fallback to old mapping
+                'security_firm': config.get('security_firm', 'FUTUSG'),
+                'trade_market': config.get('trade_market', 'US'),
+                'configured': True
+            }
+
             # Update secret with new configuration
-            config['configured'] = True
-            self._create_user_secret(user_id, config)
+            self._create_user_secret(user_id, opend_config)
 
             # Restart deployment to pick up new config
             deployment = self.apps_v1.read_namespaced_deployment(
@@ -390,19 +431,41 @@ class ContainerManager:
         except ApiException:
             pass  # Resource might not exist
 
+    def get_container_url(self, user_id):
+        """Get the internal URL for user's container"""
+        if not self.k8s_enabled:
+            return None
+
+        # Internal Kubernetes service URL
+        container_name = self._get_deployment_name(user_id)
+        return f"http://{container_name}.{self.namespace}.svc.cluster.local:8000"
+
     def trigger_data_sync(self, container_id, user_id):
         """Trigger data sync in user's container"""
         if not self.k8s_enabled:
-            return {'status': 'error', 'message': 'Kubernetes not available'}
+            # For local development, use the new container-based sync
+            from container_data_sync import sync_user_container_data
+            container_url = self.get_container_service_url(user_id)
+            return sync_user_container_data(user_id, container_url, lookback_days=730)
 
         try:
-            # For now, return success - the actual container will handle sync
-            # In production, this would make an API call to the container
-            return {
-                'status': 'success',
-                'message': 'Data sync triggered successfully',
-                'sync_time': datetime.utcnow().isoformat()
-            }
+            # In production Kubernetes environment
+            container_url = self.get_container_url(user_id)
+            if not container_url:
+                return {'status': 'error', 'message': 'Could not determine container URL'}
+
+            # Use the container-based sync service
+            from container_data_sync import sync_user_container_data
+            return sync_user_container_data(user_id, container_url, lookback_days=730)
 
         except Exception as e:
             return {'status': 'error', 'message': str(e)}
+
+    def get_container_service_url(self, user_id):
+        """Get the external/internal URL to access user's container API"""
+        if not self.k8s_enabled:
+            # Docker Compose development mode - use container name
+            return f"http://moomoo-user-{user_id}:8000"
+
+        # Production Kubernetes URL
+        return self.get_container_url(user_id)

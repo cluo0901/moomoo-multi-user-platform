@@ -5,7 +5,22 @@ class MoomooDashboard {
         this.allocationChart = null;
         this.authToken = localStorage.getItem('auth_token');
         this.userInfo = JSON.parse(localStorage.getItem('user_info') || '{}');
+        this.csrfToken = this.extractCSRFFromToken();
         this.init();
+    }
+
+    // Extract CSRF token from JWT payload for API calls
+    extractCSRFFromToken() {
+        try {
+            if (!this.authToken) return null;
+            const payload = this.authToken.split('.')[1];
+            const paddedPayload = payload + '='.repeat((4 - payload.length % 4) % 4);
+            const decoded = JSON.parse(atob(paddedPayload));
+            return decoded.csrf || null;
+        } catch (error) {
+            console.error('Error extracting CSRF token:', error);
+            return null;
+        }
     }
 
     init() {
@@ -56,10 +71,17 @@ class MoomooDashboard {
     }
 
     getAuthHeaders() {
-        return {
+        const headers = {
             'Authorization': `Bearer ${this.authToken}`,
             'Content-Type': 'application/json'
         };
+
+        // Add CSRF token for Flask-JWT-Extended compatibility
+        if (this.csrfToken) {
+            headers['X-CSRF-TOKEN'] = this.csrfToken;
+        }
+
+        return headers;
     }
 
     setupEventListeners() {
@@ -81,6 +103,26 @@ class MoomooDashboard {
 
         document.getElementById('viewAllOrders').addEventListener('click', () => {
             this.showModal('orders');
+        });
+
+        // Settings modal events
+        document.getElementById('settingsBtn').addEventListener('click', () => {
+            this.openSettingsModal();
+        });
+        document.getElementById('closeSettingsBtn').addEventListener('click', () => {
+            this.closeSettingsModal();
+        });
+        document.getElementById('cancelSettingsBtn').addEventListener('click', () => {
+            this.closeSettingsModal();
+        });
+        document.getElementById('credentialsForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.saveCredentials();
+        });
+
+        // Logout functionality
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            this.logout();
         });
     }
 
@@ -453,6 +495,179 @@ class MoomooDashboard {
         // This would open a modal with full data table
         // For now, just alert
         alert(`Opening full ${type} view... (Feature to be implemented)`);
+    }
+
+    openSettingsModal() {
+        const modal = document.getElementById('settingsModal');
+        modal.classList.remove('hidden');
+
+        // Reset form and hide status messages
+        this.clearSettingsForm();
+        this.hideSettingsMessages();
+    }
+
+    closeSettingsModal() {
+        const modal = document.getElementById('settingsModal');
+        modal.classList.add('hidden');
+
+        // Reset form
+        this.clearSettingsForm();
+        this.hideSettingsMessages();
+    }
+
+    clearSettingsForm() {
+        // Reset form fields to defaults
+        document.getElementById('moomooHost').value = '127.0.0.1';
+        document.getElementById('moomooPort').value = '11111';
+        document.getElementById('securityFirm').value = 'FUTUSG';
+        document.getElementById('tradeMarket').value = 'US';
+        document.getElementById('moomooUsername').value = '';
+        document.getElementById('moomooPassword').value = '';
+    }
+
+    hideSettingsMessages() {
+        document.getElementById('credentialsStatus').classList.add('hidden');
+        document.getElementById('credentialsSuccess').classList.add('hidden');
+        document.getElementById('credentialsError').classList.add('hidden');
+    }
+
+    showSettingsSuccess(message) {
+        document.getElementById('credentialsStatus').classList.remove('hidden');
+        document.getElementById('credentialsSuccess').classList.remove('hidden');
+        document.getElementById('credentialsError').classList.add('hidden');
+        document.getElementById('successMessage').textContent = message;
+    }
+
+    showSettingsError(message) {
+        document.getElementById('credentialsStatus').classList.remove('hidden');
+        document.getElementById('credentialsError').classList.remove('hidden');
+        document.getElementById('credentialsSuccess').classList.add('hidden');
+        document.getElementById('errorMessage').textContent = message;
+    }
+
+    setCredentialsSaving(saving) {
+        const btn = document.getElementById('saveCredentialsBtn');
+        const text = document.getElementById('saveBtnText');
+        const spinner = document.getElementById('saveBtnSpinner');
+
+        btn.disabled = saving;
+
+        if (saving) {
+            text.classList.add('hidden');
+            spinner.classList.remove('hidden');
+        } else {
+            text.classList.remove('hidden');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    async refreshToken() {
+        try {
+            const response = await fetch(`${this.baseURL}/auth/refresh`, {
+                method: 'POST',
+                headers: this.getAuthHeaders()
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                this.authToken = data.access_token;
+                localStorage.setItem('auth_token', data.access_token);
+                return true;
+            }
+        } catch (error) {
+            console.error('Token refresh failed:', error);
+        }
+        return false;
+    }
+
+    async makeAuthenticatedRequest(url, options = {}) {
+        // First attempt
+        let response = await fetch(url, {
+            ...options,
+            headers: {
+                ...this.getAuthHeaders(),
+                ...options.headers
+            }
+        });
+
+        // If token expired, try to refresh and retry
+        if (response.status === 401) {
+            console.log('Token expired, attempting refresh...');
+
+            // Try to login again with saved credentials or redirect to login
+            this.showSettingsError('Session expired. Please login again.');
+            setTimeout(() => {
+                this.logout();
+            }, 2000);
+            return response;
+        }
+
+        return response;
+    }
+
+    async saveCredentials() {
+        const formData = {
+            moomoo_host: document.getElementById('moomooHost').value.trim(),
+            moomoo_port: parseInt(document.getElementById('moomooPort').value),
+            security_firm: document.getElementById('securityFirm').value,
+            trade_market: document.getElementById('tradeMarket').value,
+            moomoo_username: document.getElementById('moomooUsername').value.trim(),
+            moomoo_password: document.getElementById('moomooPassword').value
+        };
+
+        // Validation
+        if (!formData.moomoo_host || !formData.moomoo_port) {
+            this.showSettingsError('Host and Port are required');
+            return;
+        }
+
+        if (!formData.moomoo_username || !formData.moomoo_password) {
+            this.showSettingsError('Moomoo username and password are required');
+            return;
+        }
+
+        this.setCredentialsSaving(true);
+        this.hideSettingsMessages();
+
+        try {
+            const response = await this.makeAuthenticatedRequest(`${this.baseURL}/auth/opend-config`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(formData)
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                this.showSettingsSuccess('Moomoo credentials configured successfully! Your container is being provisioned...');
+
+                // Refresh user info after successful configuration
+                setTimeout(() => {
+                    this.closeSettingsModal();
+                    this.loadDashboard(); // Refresh the dashboard
+                }, 2000);
+
+            } else if (response.status === 401) {
+                // Token invalid - handled by makeAuthenticatedRequest
+                return;
+            } else {
+                this.showSettingsError(data.error || 'Failed to configure credentials');
+            }
+
+        } catch (error) {
+            console.error('Settings save error:', error);
+            this.showSettingsError('Network error. Please try again.');
+        } finally {
+            this.setCredentialsSaving(false);
+        }
+    }
+
+    logout() {
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('user_info');
+        window.location.href = '/static/auth.html';
     }
 }
 

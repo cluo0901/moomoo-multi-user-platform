@@ -1,0 +1,46 @@
+# Production Dockerfile for moomoo trading platform
+FROM python:3.9-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash moomoo \
+    && chown -R moomoo:moomoo /app
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir \
+        psycopg2-binary \
+        redis \
+        prometheus-client \
+        gunicorn
+
+# Copy application code
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/static \
+    && chown -R moomoo:moomoo /app
+
+# Switch to non-root user
+USER moomoo
+
+# Expose port
+EXPOSE 5000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
+
+# Production startup command
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "2", "--timeout", "120", "--keep-alive", "2", "--access-logfile", "-", "--error-logfile", "-", "app:app"]

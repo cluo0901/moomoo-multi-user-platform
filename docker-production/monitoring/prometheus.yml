@@ -1,0 +1,70 @@
+# Prometheus configuration for moomoo platform monitoring
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Rules and alerting
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+# Alert manager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Main platform service
+  - job_name: 'moomoo-platform'
+    static_configs:
+      - targets: ['platform:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # PostgreSQL database
+  - job_name: 'postgresql'
+    static_configs:
+      - targets: ['postgres:5432']
+    scrape_interval: 30s
+
+  # Redis cache
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 30s
+
+  # Nginx proxy
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx:80']
+    scrape_interval: 30s
+
+  # User containers (dynamic discovery)
+  - job_name: 'user-containers'
+    static_configs:
+      - targets:
+        - 'user-alice:8000'
+        - 'user-bob:8000'
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Docker daemon metrics
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['host.docker.internal:9323']
+    scrape_interval: 30s
+
+# Remote write configuration (for external monitoring)
+# remote_write:
+#   - url: "https://your-monitoring-service/api/v1/write"
+#     basic_auth:
+#       username: your-username
+#       password: your-password

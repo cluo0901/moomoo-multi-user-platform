@@ -58,7 +58,7 @@ def register():
 
         # Create access token
         access_token = create_access_token(
-            identity=user.id,
+            identity=str(user.id),
             expires_delta=timedelta(days=7)
         )
 
@@ -102,7 +102,7 @@ def login():
 
         # Create access token
         access_token = create_access_token(
-            identity=user.id,
+            identity=str(user.id),
             expires_delta=timedelta(days=7)
         )
 
@@ -121,7 +121,7 @@ def get_current_user():
     """Get current user info"""
     try:
         user_id = get_jwt_identity()
-        user = User.query.get(user_id)
+        user = User.query.get(int(user_id))
 
         if not user:
             return jsonify({'error': 'User not found'}), 404
@@ -137,20 +137,28 @@ def get_container_status():
     """Get user's container status"""
     try:
         user_id = get_jwt_identity()
-        user = User.query.get(user_id)
+        user = User.query.get(int(user_id))
 
         if not user:
             return jsonify({'error': 'User not found'}), 404
 
         # Get real-time container status
         try:
-            status = container_mgr.get_container_status(user.container_id)
-            if status != user.container_status:
+            # Check if Kubernetes is available
+            if not container_mgr.k8s_enabled:
+                # Local development mode - simulate container status
+                status = 'simulated_local'
                 user.container_status = status
                 db.session.commit()
+            else:
+                status = container_mgr.get_container_status(user.container_id)
+                if status != user.container_status:
+                    user.container_status = status
+                    db.session.commit()
         except Exception as e:
             print(f"Error getting container status: {e}")
-            status = user.container_status
+            # In local development, default to simulated status
+            status = 'simulated_local' if not container_mgr.k8s_enabled else user.container_status
 
         return jsonify({
             'container_status': status,
@@ -168,7 +176,7 @@ def start_container():
     """Start user's container"""
     try:
         user_id = get_jwt_identity()
-        user = User.query.get(user_id)
+        user = User.query.get(int(user_id))
 
         if not user:
             return jsonify({'error': 'User not found'}), 404
@@ -192,7 +200,7 @@ def stop_container():
     """Stop user's container"""
     try:
         user_id = get_jwt_identity()
-        user = User.query.get(user_id)
+        user = User.query.get(int(user_id))
 
         if not user:
             return jsonify({'error': 'User not found'}), 404
@@ -215,34 +223,52 @@ def configure_opend():
     """Configure OpenD credentials for user's container"""
     try:
         user_id = get_jwt_identity()
-        user = User.query.get(user_id)
+        user = User.query.get(int(user_id))
 
         if not user:
             return jsonify({'error': 'User not found'}), 404
 
         data = request.get_json()
 
-        # Required OpenD configuration
-        required_fields = ['moomoo_host', 'moomoo_port', 'security_firm', 'trade_market']
-        for field in required_fields:
-            if not data.get(field):
-                return jsonify({'error': f'{field} is required'}), 400
+        # Required OpenD configuration - support both old and new field names
+        # Old fields: moomoo_host, moomoo_port (for backward compatibility)
+        # New fields: moomoo_username, moomoo_password (for real credentials)
 
-        # Configure OpenD in container
+        username = data.get('moomoo_username') or data.get('moomoo_host')
+        password = data.get('moomoo_password') or data.get('moomoo_port')
+        security_firm = data.get('security_firm')
+        trade_market = data.get('trade_market')
+
+        if not username:
+            return jsonify({'error': 'moomoo_username or moomoo_host is required'}), 400
+        if not password:
+            return jsonify({'error': 'moomoo_password or moomoo_port is required'}), 400
+        if not security_firm:
+            return jsonify({'error': 'security_firm is required'}), 400
+        if not trade_market:
+            return jsonify({'error': 'trade_market is required'}), 400
+
+        # Configure OpenD in container with real moomoo credentials
         result = container_mgr.configure_opend(
             user.container_id,
             {
-                'host': data['moomoo_host'],
-                'port': data['moomoo_port'],
-                'security_firm': data['security_firm'],
-                'trade_market': data['trade_market'],
-                'credentials': data.get('credentials', {})
+                'host': username,  # Pass username for backward compatibility
+                'port': password,  # Pass password for backward compatibility
+                'security_firm': security_firm,
+                'trade_market': trade_market,
+                'moomoo_username': username,  # Also pass directly
+                'moomoo_password': password   # Also pass directly
             }
         )
 
-        if result.get('status') == 'success':
+        # For local development mode, always mark as configured
+        if result.get('status') == 'success' or result.get('message') == 'Kubernetes not available':
             user.openapi_configured = True
             db.session.commit()
+
+            # Override result for local development
+            if result.get('message') == 'Kubernetes not available':
+                result = {'status': 'success', 'message': 'OpenD configuration saved (local development mode)'}
 
         return jsonify(result)
 

@@ -11,7 +11,7 @@ api_bp = Blueprint('api', __name__)
 def get_current_user():
     """Get current authenticated user"""
     user_id = get_jwt_identity()
-    return User.query.get(user_id) if user_id else None
+    return User.query.get(int(user_id)) if user_id else None
 
 @api_bp.route('/trades', methods=['GET'])
 @jwt_required()
@@ -277,7 +277,7 @@ def refresh_data():
                 'error': 'OpenD not configured. Please configure your moomoo credentials first.'
             }), 400
 
-        if user.container_status not in ['running']:
+        if user.container_status not in ['running', 'simulated_local']:
             return jsonify({
                 'error': f'Container is not running (status: {user.container_status}). Please start your container first.'
             }), 400
@@ -286,7 +286,8 @@ def refresh_data():
         from container_manager import ContainerManager
         container_mgr = ContainerManager()
 
-        result = container_mgr.trigger_data_sync(user.container_id, user.id)
+        # Use the username for Docker Compose container name matching
+        result = container_mgr.trigger_data_sync(user.container_id, user.username)
 
         if result.get('status') == 'success':
             # Update last sync time

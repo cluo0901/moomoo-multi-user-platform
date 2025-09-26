@@ -77,7 +77,7 @@ def get_date_chunks(start_date, end_date, chunk_days):
 
     return chunks
 
-def sync_trades(trd_ctx, start_date, end_date):
+def sync_trades(trd_ctx, start_date, end_date, user_id=None):
     """Sync trades data to database using chunked retrieval"""
     print(f"Syncing trades from {start_date} to {end_date}...")
 
@@ -101,10 +101,7 @@ def sync_trades(trd_ctx, start_date, end_date):
         print(f"    Found {len(deals_df)} trades in chunk {i}")
 
         for _, row in deals_df.iterrows():
-            # Check if trade already exists
-            existing = Trade.query.filter_by(deal_id=str(row.get('deal_id', ''))).first()
-            if existing:
-                continue
+            # Skip duplicate checking for fresh sync to avoid schema issues
 
             # Parse create_time (deals use create_time in API response)
             deal_time = parse_datetime(row.get('create_time'))
@@ -125,7 +122,8 @@ def sync_trades(trd_ctx, start_date, end_date):
                 price=price,
                 val=val,
                 side=str(row.get('trd_side', '')).upper(),
-                order_id=str(row.get('order_id', ''))
+                order_id=str(row.get('order_id', '')),
+                user_id=user_id
             )
 
             db.session.add(trade)
@@ -138,7 +136,7 @@ def sync_trades(trd_ctx, start_date, end_date):
     print(f"Total synced: {synced_count} trades")
     return synced_count
 
-def sync_orders(trd_ctx, start_date, end_date):
+def sync_orders(trd_ctx, start_date, end_date, user_id=None):
     """Sync orders data to database using chunked retrieval"""
     print(f"Syncing orders from {start_date} to {end_date}...")
 
@@ -162,15 +160,7 @@ def sync_orders(trd_ctx, start_date, end_date):
         print(f"    Found {len(orders_df)} orders in chunk {i}")
 
         for _, row in orders_df.iterrows():
-            # Check if order already exists
-            existing = Order.query.filter_by(order_id=str(row.get('order_id', ''))).first()
-            if existing:
-                # Update existing order
-                existing.order_status = str(row.get('order_status', ''))
-                existing.dealt_qty = float(row.get('dealt_qty', 0))
-                existing.dealt_avg_price = float(row.get('dealt_avg_price', 0)) if row.get('dealt_avg_price') else None
-                existing.updated_time = parse_datetime(row.get('updated_time'))
-                continue
+            # Skip duplicate checking for fresh sync to avoid schema issues
 
             # Parse create_time
             create_time = parse_datetime(row.get('create_time'))
@@ -189,7 +179,8 @@ def sync_orders(trd_ctx, start_date, end_date):
                 create_time=create_time,
                 updated_time=parse_datetime(row.get('updated_time')),
                 dealt_qty=float(row.get('dealt_qty', 0)),
-                dealt_avg_price=float(row.get('dealt_avg_price', 0)) if row.get('dealt_avg_price') else None
+                dealt_avg_price=float(row.get('dealt_avg_price', 0)) if row.get('dealt_avg_price') else None,
+                user_id=user_id
             )
 
             db.session.add(order)
@@ -202,7 +193,7 @@ def sync_orders(trd_ctx, start_date, end_date):
     print(f"Total synced: {synced_count} orders")
     return synced_count
 
-def sync_positions(trd_ctx):
+def sync_positions(trd_ctx, user_id=None):
     """Sync current positions to database"""
     print("Syncing positions...")
 
@@ -232,7 +223,8 @@ def sync_positions(trd_ctx):
             today_buy_qty=float(row.get('today_buy_qty', 0)),
             today_sell_val=float(row.get('today_sell_val', 0)),
             today_sell_qty=float(row.get('today_sell_qty', 0)),
-            snapshot_time=snapshot_time
+            snapshot_time=snapshot_time,
+            user_id=user_id
         )
 
         db.session.add(position)
@@ -243,7 +235,7 @@ def sync_positions(trd_ctx):
     print(f"Synced {synced_count} positions")
     return synced_count
 
-def sync_moomoo_data():
+def sync_moomoo_data(user_id=None):
     """Main function to sync all moomoo data"""
     from app import app
 
@@ -274,15 +266,15 @@ def sync_moomoo_data():
         try:
             with app.app_context():
                 # Sync trades
-                trades_count = sync_trades(trd_ctx, start_date, end_date)
+                trades_count = sync_trades(trd_ctx, start_date, end_date, user_id)
                 result['synced_counts']['trades'] = trades_count
 
                 # Sync orders
-                orders_count = sync_orders(trd_ctx, start_date, end_date)
+                orders_count = sync_orders(trd_ctx, start_date, end_date, user_id)
                 result['synced_counts']['orders'] = orders_count
 
                 # Sync positions
-                positions_count = sync_positions(trd_ctx)
+                positions_count = sync_positions(trd_ctx, user_id)
                 result['synced_counts']['positions'] = positions_count
 
             print("Data sync completed successfully!")

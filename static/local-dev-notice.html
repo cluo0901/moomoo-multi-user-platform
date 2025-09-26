@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        .dev-notice {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            font-family: Arial, sans-serif;
+        }
+        .dev-notice h3 {
+            margin: 0 0 10px 0;
+            font-size: 18px;
+        }
+        .dev-notice p {
+            margin: 5px 0;
+            opacity: 0.9;
+        }
+        .feature-list {
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .feature-list ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="dev-notice">
+        <h3>🚀 Local Development Mode</h3>
+        <p>You're running the multi-user moomoo platform in local development mode.</p>
+
+        <div class="feature-list">
+            <p><strong>✅ Working Features:</strong></p>
+            <ul>
+                <li>Multi-user registration and authentication</li>
+                <li>User-specific data isolation</li>
+                <li>Trading dashboard interface</li>
+                <li>API endpoints with JWT protection</li>
+            </ul>
+        </div>
+
+        <div class="feature-list">
+            <p><strong>🔄 Simulated in Local Mode:</strong></p>
+            <ul>
+                <li>Container management (requires Kubernetes in production)</li>
+                <li>Real-time data sync (requires moomoo API connection)</li>
+            </ul>
+        </div>
+
+        <p><em>For full functionality, deploy to Kubernetes following the DEPLOYMENT.md guide.</em></p>
+    </div>
+</body>
+</html>

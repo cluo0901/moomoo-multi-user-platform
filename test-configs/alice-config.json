@@ -1,0 +1,10 @@
+{
+  "moomoo_host": "127.0.0.1",
+  "moomoo_port": 11111,
+  "security_firm": "FUTUSG",
+  "trade_market": "US",
+  "moomoo_username": "102872417",
+  "moomoo_password": "L850901c",
+  "configured": true,
+  "user_id": "alice"
+}

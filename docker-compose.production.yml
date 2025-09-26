@@ -1,0 +1,350 @@
+# Production-like local environment for moomoo multi-user trading platform
+# This simulates the full production stack locally
+version: '3.8'
+
+networks:
+  # Frontend network - public facing
+  frontend:
+    driver: bridge
+  # Backend network - internal services
+  backend:
+    driver: bridge
+    internal: true
+  # User containers network - isolated per user
+  user-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+services:
+  # PostgreSQL - Production Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: moomoo-postgres
+    environment:
+      POSTGRES_DB: moomoo_platform
+      POSTGRES_USER: moomoo_user
+      POSTGRES_PASSWORD: secure_production_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker-production/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - backend
+    ports:
+      - "5432:5432"  # For debugging only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moomoo_user -d moomoo_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis - Session Store & Cache
+  redis:
+    image: redis:7-alpine
+    container_name: moomoo-redis
+    command: redis-server --requirepass redis_production_password --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend
+    ports:
+      - "6379:6379"  # For debugging only
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Main Platform Service
+  platform:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    container_name: moomoo-platform
+    environment:
+      # Database configuration
+      DATABASE_URL: postgresql://moomoo_user:secure_production_password@postgres:5432/moomoo_platform
+
+      # JWT and Security
+      JWT_SECRET_KEY: super-secure-jwt-key-for-production-testing-256-bits
+      SECRET_KEY: flask-secret-key-for-production
+
+      # Redis configuration
+      REDIS_URL: redis://:redis_production_password@redis:6379/0
+
+      # Application settings
+      ENVIRONMENT: production
+      DEBUG: "false"
+      FLASK_ENV: production
+
+      # Container management
+      CONTAINER_MANAGER_MODE: docker-compose
+      DOCKER_NETWORK: moomoo-production_user-network
+
+      # OpenD container settings
+      OPEND_CONTAINER_IMAGE: moomoo-opend-connector:production
+
+      # Resource limits
+      MAX_USER_CONTAINERS: 50
+      CONTAINER_CPU_LIMIT: 0.5
+      CONTAINER_MEMORY_LIMIT: 512m
+
+      # Monitoring
+      PROMETHEUS_METRICS: "true"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # For container management
+      - ./logs:/app/logs
+    networks:
+      - frontend
+      - backend
+      - user-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Nginx - Reverse Proxy & Load Balancer
+  nginx:
+    image: nginx:alpine
+    container_name: moomoo-nginx
+    volumes:
+      - ./docker-production/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker-production/nginx/ssl:/etc/nginx/ssl:ro
+      - ./static:/usr/share/nginx/html/static:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - platform
+    networks:
+      - frontend
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # User Container Template (dynamically created)
+  # This shows the structure - actual containers created by platform
+  user-container-template:
+    build:
+      context: ./docker/opend-connector
+      dockerfile: Dockerfile
+    image: moomoo-opend-connector:production
+    profiles:
+      - template  # Don't start by default
+    environment:
+      USER_ID: template
+      PLATFORM_API_URL: http://platform:5000
+    networks:
+      - user-network
+      - backend
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Monitoring Stack
+
+  # Prometheus - Metrics Collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: moomoo-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./docker-production/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - backend
+      - user-network
+    restart: unless-stopped
+
+  # Grafana - Metrics Visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: moomoo-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker-production/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker-production/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # Test User Containers (for testing multi-user isolation)
+
+  # Alice's Container
+  user-alice:
+    build:
+      context: ./docker/opend-connector
+      dockerfile: Dockerfile
+    platform: linux/amd64  # Force x86_64 architecture for OpenD binary compatibility
+    container_name: moomoo-user-alice
+    environment:
+      USER_ID: alice
+      USER_NAME: alice
+      PLATFORM_API_URL: http://platform:5000
+    networks:
+      - user-network
+      - backend
+    volumes:
+      - ./test-configs/alice-config.json:/app/config/config.json:ro
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Bob's Container (for multi-user testing)
+  user-bob:
+    build:
+      context: ./docker/opend-connector
+      dockerfile: Dockerfile
+    platform: linux/amd64  # Force x86_64 architecture for OpenD binary compatibility
+    container_name: moomoo-user-bob
+    environment:
+      USER_ID: bob
+      USER_NAME: bob
+      PLATFORM_API_URL: http://platform:5000
+    networks:
+      - user-network
+      - backend
+    volumes:
+      - ./test-configs/bob-config.json:/app/config/config.json:ro
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Development Tools
+
+  # pgAdmin - Database Management (development only)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: moomoo-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@moomoo.local
+      PGADMIN_DEFAULT_PASSWORD: pgadmin_password
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres
+    networks:
+      - backend
+    profiles:
+      - dev  # Only start in development profile
+    restart: unless-stopped
+
+  # Redis Commander - Redis Management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: moomoo-redis-commander
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:redis_production_password
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - backend
+    profiles:
+      - dev  # Only start in development profile
+    restart: unless-stopped
+
+  # Load Testing Service
+  load-tester:
+    build:
+      context: ./docker-production/load-test
+      dockerfile: Dockerfile
+    container_name: moomoo-load-tester
+    environment:
+      TARGET_URL: http://nginx
+      USERS_COUNT: 10
+      RAMP_UP_TIME: 60
+    depends_on:
+      - nginx
+      - platform
+    networks:
+      - frontend
+    profiles:
+      - load-test  # Only start during load testing
+    volumes:
+      - ./load-test-results:/app/results

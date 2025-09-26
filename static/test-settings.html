@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Settings Modal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .debug {
+            background: #f0f0f0;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border-left: 4px solid #007cba;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-3xl font-bold text-gray-800 mb-8">🔧 Settings Modal Debug Test</h1>
+
+        <div class="debug">
+            <h3>Debug Info</h3>
+            <div id="debugInfo">Loading...</div>
+        </div>
+
+        <!-- Test Settings Button -->
+        <button id="settingsBtn" class="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded mb-4">
+            ⚙️ Settings (Click Me!)
+        </button>
+
+        <!-- Simple Test Button -->
+        <button id="testBtn" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded mb-4">
+            🧪 Test Modal Directly
+        </button>
+
+        <!-- Moomoo Credentials Settings Modal -->
+        <div id="settingsModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden z-50">
+            <div class="flex justify-center items-center h-full">
+                <div class="bg-white rounded-lg shadow-lg w-full max-w-md mx-4">
+                    <div class="px-6 py-4 border-b border-gray-200">
+                        <div class="flex justify-between items-center">
+                            <h3 class="text-lg font-semibold text-gray-800">⚙️ Moomoo Connection Settings</h3>
+                            <button id="closeSettingsBtn" class="text-gray-400 hover:text-gray-600">
+                                ✕
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="p-6">
+                        <form id="credentialsForm">
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Moomoo Username</label>
+                                <input type="text" id="moomooUsername" class="w-full border rounded px-3 py-2" placeholder="102872417" value="102872417">
+                            </div>
+
+                            <div class="mb-6">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Moomoo Password</label>
+                                <input type="password" id="moomooPassword" class="w-full border rounded px-3 py-2" placeholder="L850901c" value="L850901c">
+                            </div>
+
+                            <div class="flex justify-end space-x-3">
+                                <button type="button" id="cancelSettingsBtn" class="px-4 py-2 text-gray-600 bg-gray-200 rounded hover:bg-gray-300">
+                                    Cancel
+                                </button>
+                                <button type="submit" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">
+                                    Save Configuration
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Debug information
+        function updateDebug(message) {
+            const debugDiv = document.getElementById('debugInfo');
+            debugDiv.innerHTML += '<br>' + new Date().toLocaleTimeString() + ': ' + message;
+        }
+
+        // Wait for page to load
+        document.addEventListener('DOMContentLoaded', () => {
+            updateDebug('Page loaded, setting up event listeners...');
+
+            // Check if elements exist
+            const settingsBtn = document.getElementById('settingsBtn');
+            const settingsModal = document.getElementById('settingsModal');
+            const closeBtn = document.getElementById('closeSettingsBtn');
+            const cancelBtn = document.getElementById('cancelSettingsBtn');
+            const testBtn = document.getElementById('testBtn');
+
+            updateDebug(`Elements found:
+                settingsBtn: ${!!settingsBtn},
+                modal: ${!!settingsModal},
+                closeBtn: ${!!closeBtn},
+                cancelBtn: ${!!cancelBtn}`);
+
+            // Settings button click
+            if (settingsBtn) {
+                settingsBtn.addEventListener('click', () => {
+                    updateDebug('Settings button clicked!');
+                    console.log('Settings button clicked!');
+
+                    if (settingsModal) {
+                        settingsModal.classList.remove('hidden');
+                        updateDebug('Modal should now be visible');
+                    } else {
+                        updateDebug('ERROR: Modal not found!');
+                    }
+                });
+                updateDebug('Settings button event listener added');
+            }
+
+            // Test button (direct modal show)
+            if (testBtn) {
+                testBtn.addEventListener('click', () => {
+                    updateDebug('Test button clicked - showing modal directly');
+                    if (settingsModal) {
+                        settingsModal.classList.remove('hidden');
+                        updateDebug('Modal shown via test button');
+                    }
+                });
+            }
+
+            // Close button
+            if (closeBtn) {
+                closeBtn.addEventListener('click', () => {
+                    updateDebug('Close button clicked');
+                    settingsModal.classList.add('hidden');
+                });
+            }
+
+            // Cancel button
+            if (cancelBtn) {
+                cancelBtn.addEventListener('click', () => {
+                    updateDebug('Cancel button clicked');
+                    settingsModal.classList.add('hidden');
+                });
+            }
+
+            // Form submission
+            const form = document.getElementById('credentialsForm');
+            if (form) {
+                form.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    updateDebug('Form submitted - credentials would be saved here');
+                    alert('Form submitted! In real version, this would save credentials.');
+                });
+            }
+
+            updateDebug('All event listeners set up successfully');
+        });
+    </script>
+</body>
+</html>

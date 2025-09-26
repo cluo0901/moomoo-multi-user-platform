@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alice Login - Moomoo Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+    <div class="max-w-md w-full bg-white rounded-lg shadow-md p-6">
+        <h1 class="text-2xl font-bold text-center mb-6">Alice's Moomoo Dashboard</h1>
+
+        <form id="loginForm" onsubmit="return handleLogin(event)">
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Username</label>
+                <input type="text" id="username" value="alice" class="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" readonly>
+            </div>
+
+            <div class="mb-6">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Password</label>
+                <input type="password" id="password" value="password123" class="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+
+            <button type="submit" id="loginBtn" class="w-full bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600 focus:outline-none">
+                Login to Dashboard
+            </button>
+        </form>
+
+        <!-- Status Messages -->
+        <div id="statusMessage" class="mt-4 p-3 rounded hidden">
+            <span id="statusText"></span>
+        </div>
+
+        <!-- Data Info -->
+        <div class="mt-6 p-4 bg-green-50 border border-green-200 rounded">
+            <h3 class="text-sm font-semibold text-green-800 mb-2">✅ Your Trading Data is Ready!</h3>
+            <ul class="text-xs text-green-700 space-y-1">
+                <li>• 111 trades synced from moomoo account</li>
+                <li>• 108 orders with complete history</li>
+                <li>• 4 current positions with P&L</li>
+                <li>• Account: 102872417 (your moomoo credentials)</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        function showStatus(type, message) {
+            const statusDiv = document.getElementById('statusMessage');
+            const statusText = document.getElementById('statusText');
+
+            statusDiv.className = 'mt-4 p-3 rounded ' + (type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700');
+            statusText.textContent = (type === 'success' ? '✅ ' : '❌ ') + message;
+            statusDiv.classList.remove('hidden');
+        }
+
+        async function handleLogin(event) {
+            event.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const loginBtn = document.getElementById('loginBtn');
+
+            loginBtn.disabled = true;
+            loginBtn.textContent = 'Logging in...';
+
+            try {
+                const response = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showStatus('success', 'Login successful! Redirecting to dashboard...');
+
+                    // Store auth token
+                    localStorage.setItem('auth_token', result.access_token);
+                    localStorage.setItem('user_info', JSON.stringify(result.user));
+
+                    // Redirect to main dashboard
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1500);
+                } else {
+                    showStatus('error', result.error || 'Login failed');
+                }
+            } catch (error) {
+                showStatus('error', 'Network error. Please try again.');
+                console.error('Login error:', error);
+            } finally {
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'Login to Dashboard';
+            }
+
+            return false;
+        }
+
+        // Auto-focus on password field
+        window.addEventListener('load', () => {
+            document.getElementById('password').focus();
+        });
+    </script>
+</body>
+</html>

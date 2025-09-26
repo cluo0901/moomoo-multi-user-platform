@@ -12,9 +12,16 @@ app = Flask(__name__, static_folder='static')
 CORS(app)
 
 # JWT Configuration
-app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'local-dev-jwt-secret-key-moomoo-2024')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)
 app.config['JWT_ALGORITHM'] = 'HS256'
+# Completely disable CSRF protection for JWT tokens in all forms
+app.config['JWT_CSRF_CHECK_FORM'] = False
+app.config['JWT_CSRF_IN_COOKIES'] = False
+app.config['JWT_COOKIE_CSRF_PROTECT'] = False
+# Additional CSRF disable options for different Flask-JWT-Extended versions
+app.config['JWT_TOKEN_LOCATION'] = ['headers']
+app.config['JWT_ACCESS_CSRF_HEADER_NAME'] = None
 
 # Database configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///moomoo_trading.db')
@@ -31,10 +38,12 @@ bcrypt.init_app(app)
 # Import routes
 from api_routes import api_bp
 from auth_routes import auth_bp
+from local_dev_routes import local_dev_bp
 
 # Register blueprints
 app.register_blueprint(api_bp, url_prefix='/api')
 app.register_blueprint(auth_bp, url_prefix='/auth')
+app.register_blueprint(local_dev_bp, url_prefix='/')
 
 # JWT Error Handlers
 @jwt.expired_token_loader
@@ -54,6 +63,7 @@ def index():
     return send_from_directory(app.static_folder, 'index.html')
 
 @app.route('/auth')
+@app.route('/auth/')
 def auth():
     return send_from_directory(app.static_folder, 'auth.html')
 

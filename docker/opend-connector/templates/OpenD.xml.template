@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+	<!-- OpenD Configuration Template for moomoo Trading -->
+	<!-- This template will be populated with user-specific credentials at runtime -->
+
+	<!-- Data File Configuration -->
+	<item key="AppData.dat">./Appdata.dat</item>
+
+	<!-- Security Configuration -->
+	<item key="Encrypt">false</item>
+
+	<!-- User Login Configuration -->
+	<item key="Login.Username">${MOOMOO_USERNAME}</item>
+	<item key="Login.Password">${MOOMOO_PASSWORD}</item>
+	<item key="Login.TradeEnv">${TRADE_ENV}</item>
+
+	<!-- Trading Configuration -->
+	<item key="Trade.SecurityFirm">${SECURITY_FIRM}</item>
+	<item key="Trade.Market">${TRADE_MARKET}</item>
+
+	<!-- API Configuration -->
+	<item key="API.Port">11111</item>
+	<item key="API.Host">0.0.0.0</item>
+	<item key="API.PushProtocol">Json</item>
+
+	<!-- Logging Configuration -->
+	<item key="Log.Level">${LOG_LEVEL}</item>
+	<item key="Log.Path">./logs/</item>
+
+	<!-- Network Configuration -->
+	<item key="Net.ConnectTimeOut">10</item>
+	<item key="Net.ReceiveTimeOut">10</item>
+
+	<!-- Environment Configuration -->
+	<item key="Env.Language">en</item>
+	<item key="Env.TimeZone">${TIME_ZONE}</item>
+
+	<!-- Auto Configuration -->
+	<item key="Auto.ReConnect">true</item>
+	<item key="Auto.KeepAlive">true</item>
+</root>

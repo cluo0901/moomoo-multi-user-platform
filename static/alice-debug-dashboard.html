@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alice's Trading Data - Debug Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-6xl mx-auto">
+            <!-- Header -->
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <h1 class="text-3xl font-bold text-gray-800">Alice's Trading Data</h1>
+                <p class="text-gray-600 mt-2">Debug Dashboard - Showing your synced moomoo data</p>
+                <p class="text-sm text-green-600 mt-1">✅ Connected to database with 111 trades, 108 orders, 4 positions</p>
+            </div>
+
+            <!-- Stats Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6" id="statsCards">
+                <!-- Loading placeholder -->
+                <div class="bg-white p-6 rounded-lg shadow-md">
+                    <div class="animate-pulse">
+                        <div class="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
+                        <div class="h-8 bg-gray-200 rounded w-1/2"></div>
+                    </div>
+                </div>
+                <div class="bg-white p-6 rounded-lg shadow-md">
+                    <div class="animate-pulse">
+                        <div class="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
+                        <div class="h-8 bg-gray-200 rounded w-1/2"></div>
+                    </div>
+                </div>
+                <div class="bg-white p-6 rounded-lg shadow-md">
+                    <div class="animate-pulse">
+                        <div class="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
+                        <div class="h-8 bg-gray-200 rounded w-1/2"></div>
+                    </div>
+                </div>
+                <div class="bg-white p-6 rounded-lg shadow-md">
+                    <div class="animate-pulse">
+                        <div class="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
+                        <div class="h-8 bg-gray-200 rounded w-1/2"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Trades -->
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Recent Trades</h2>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full table-auto">
+                        <thead>
+                            <tr class="bg-gray-50">
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Side</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Qty</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tradesTable">
+                            <!-- Loading placeholder -->
+                            <tr>
+                                <td colspan="6" class="px-4 py-8 text-center text-gray-500">
+                                    <div class="animate-pulse">Loading trades...</div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="mt-4 text-sm text-gray-500" id="tradesCount">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Load dashboard stats
+        async function loadDashboardStats() {
+            try {
+                const response = await fetch('/dev/alice-dashboard-stats');
+                const data = await response.json();
+
+                if (data.error) {
+                    console.error('Stats error:', data.error);
+                    return;
+                }
+
+                // Update stats cards
+                document.getElementById('statsCards').innerHTML = `
+                    <div class="bg-white p-6 rounded-lg shadow-md">
+                        <div class="flex items-center">
+                            <div>
+                                <p class="text-sm font-medium text-gray-500">Total Trades (30d)</p>
+                                <p class="text-2xl font-bold text-gray-900">${data.trades_stats.total_trades}</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-lg shadow-md">
+                        <div class="flex items-center">
+                            <div>
+                                <p class="text-sm font-medium text-gray-500">Total Volume (30d)</p>
+                                <p class="text-2xl font-bold text-gray-900">$${data.trades_stats.total_volume.toFixed(0)}</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-lg shadow-md">
+                        <div class="flex items-center">
+                            <div>
+                                <p class="text-sm font-medium text-gray-500">Positions</p>
+                                <p class="text-2xl font-bold text-gray-900">${data.positions_stats.total_positions}</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white p-6 rounded-lg shadow-md">
+                        <div class="flex items-center">
+                            <div>
+                                <p class="text-sm font-medium text-gray-500">Market Value</p>
+                                <p class="text-2xl font-bold text-gray-900">$${data.positions_stats.total_market_value.toFixed(0)}</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+            } catch (error) {
+                console.error('Error loading dashboard stats:', error);
+            }
+        }
+
+        // Load recent trades
+        async function loadRecentTrades() {
+            try {
+                const response = await fetch('/dev/alice-trades?per_page=20');
+                const data = await response.json();
+
+                if (data.error) {
+                    console.error('Trades error:', data.error);
+                    return;
+                }
+
+                // Update trades table
+                const tradesHTML = data.trades.map(trade => {
+                    const dealTime = new Date(trade.deal_time).toLocaleDateString() + ' ' +
+                                    new Date(trade.deal_time).toLocaleTimeString();
+                    const sideColor = trade.side === 'BUY' ? 'text-green-600' : 'text-red-600';
+
+                    return `
+                        <tr class="border-b">
+                            <td class="px-4 py-2 text-sm text-gray-900">${dealTime}</td>
+                            <td class="px-4 py-2">
+                                <div class="text-sm text-gray-900">${trade.code}</div>
+                                <div class="text-xs text-gray-500">${trade.stock_name}</div>
+                            </td>
+                            <td class="px-4 py-2 text-sm ${sideColor} font-medium">${trade.side}</td>
+                            <td class="px-4 py-2 text-sm text-gray-900">${trade.qty}</td>
+                            <td class="px-4 py-2 text-sm text-gray-900">$${trade.price.toFixed(2)}</td>
+                            <td class="px-4 py-2 text-sm text-gray-900">$${trade.val.toFixed(2)}</td>
+                        </tr>
+                    `;
+                }).join('');
+
+                document.getElementById('tradesTable').innerHTML = tradesHTML;
+                document.getElementById('tradesCount').textContent =
+                    `Showing ${data.trades.length} of ${data.total} total trades`;
+
+            } catch (error) {
+                console.error('Error loading trades:', error);
+                document.getElementById('tradesTable').innerHTML = `
+                    <tr>
+                        <td colspan="6" class="px-4 py-8 text-center text-red-500">
+                            Error loading trades: ${error.message}
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+
+        // Load data when page loads
+        window.addEventListener('load', () => {
+            loadDashboardStats();
+            loadRecentTrades();
+        });
+    </script>
+</body>
+</html>

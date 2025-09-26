@@ -1,48 +1,70 @@
-FROM ubuntu:22.04
+# OpenD Connector Container
+# Runs OpenD with API wrapper for each user
+FROM python:3.9-slim
 
-# Install system dependencies
+# Install system dependencies including libfuse2 for OpenD
 RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-venv \
-    curl \
     wget \
     unzip \
+    curl \
+    procps \
+    build-essential \
+    libfuse2 \
+    gettext-base \
     && rm -rf /var/lib/apt/lists/*
-
-# Create app user
-RUN useradd -m -u 1001 appuser
 
 # Set working directory
 WORKDIR /app
 
-# Copy moomoo OpenD (you would need to download this)
-# This is a placeholder - in production you'd need the actual OpenD binary
-RUN mkdir -p /app/opend
-# COPY opend/ /app/opend/
+# Copy requirements first for better caching
+COPY requirements.txt .
 
 # Install Python dependencies
-COPY requirements-connector.txt .
-RUN python3 -m pip install --no-cache-dir -r requirements-connector.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy connector application
-COPY connector/ /app/connector/
-COPY data_sync.py /app/
-COPY currency_converter.py /app/
-COPY models.py /app/
+# Create directories
+RUN mkdir -p /app/config /app/logs /app/opend /app/templates /app/scripts
 
-# Create config directory
-RUN mkdir -p /app/config && chown appuser:appuser /app/config
+# Download and install real OpenD binary
+# NOTE: This is a placeholder for manual OpenD binary installation
+# The real OpenD binary needs to be manually downloaded from moomoo and placed here
+# Instructions for manual installation:
+# 1. Download OpenD for Ubuntu from: https://www.moomoo.com/us/support/topic3_441
+# 2. Extract the archive and copy OpenD binary and Appdata.dat to /app/opend/
+# 3. The binary should be named 'OpenD' and be executable
+RUN echo '#!/bin/bash\n\
+echo "NOTICE: This is a placeholder for real OpenD binary"\n\
+echo "Please replace this container with one containing the actual OpenD binary"\n\
+echo "Download OpenD from: https://www.moomoo.com/us/support/topic3_441"\n\
+echo "Copy OpenD binary and Appdata.dat to /app/opend/"\n\
+echo "OpenD binary should be executable and named OpenD"\n\
+echo "Current placeholder will exit in 10 seconds"\n\
+sleep 10\n\
+echo "Placeholder OpenD exiting - real binary required for production"' > /app/opend/OpenD \
+    && chmod +x /app/opend/OpenD \
+    && echo "PLACEHOLDER_BINARY=true" > /app/opend/binary_status
 
-# Switch to app user
-USER appuser
+# Copy connector service and configuration files
+COPY connector_service.py .
+COPY templates/ /app/templates/
+COPY scripts/ /app/scripts/
+
+# Make scripts executable
+RUN chmod +x /app/scripts/*.sh
+
+# Create non-root user with proper groups
+RUN useradd --create-home --shell /bin/bash --uid 1000 opend \
+    && chown -R opend:opend /app
+
+# Switch to non-root user
+USER opend
 
 # Expose ports
-EXPOSE 11111 8000
+EXPOSE 8000 11111
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Start command
-CMD ["python3", "/app/connector/main.py"]
+# Production startup with Gunicorn
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--threads", "2", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "connector_service:app"]

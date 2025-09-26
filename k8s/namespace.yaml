@@ -4,7 +4,6 @@ metadata:
   name: moomoo-platform
   labels:
     name: moomoo-platform
-    app: moomoo-trading-platform
 ---
 apiVersion: v1
 kind: Namespace
@@ -12,4 +11,3 @@ metadata:
   name: moomoo-users
   labels:
     name: moomoo-users
-    app: moomoo-trading-platform

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Login - Debug</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .form-group { margin: 10px 0; }
+        input { padding: 8px; margin: 5px; width: 200px; }
+        button { padding: 10px 20px; background: #007cba; color: white; border: none; cursor: pointer; }
+        .result { margin: 20px 0; padding: 10px; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Debug Login Test</h1>
+
+    <form id="loginForm">
+        <div class="form-group">
+            <label>Username:</label>
+            <input type="text" id="username" value="alice" required>
+        </div>
+        <div class="form-group">
+            <label>Password:</label>
+            <input type="password" id="password" value="password123" required>
+        </div>
+        <button type="submit">Test Login</button>
+    </form>
+
+    <div id="result"></div>
+
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const resultDiv = document.getElementById('result');
+
+            resultDiv.innerHTML = '<div>🔄 Testing login...</div>';
+
+            try {
+                console.log('Attempting login to:', window.location.origin + '/auth/login');
+                console.log('Data:', { username, password });
+
+                const response = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+
+                console.log('Response status:', response.status);
+                console.log('Response headers:', [...response.headers.entries()]);
+
+                const data = await response.json();
+                console.log('Response data:', data);
+
+                if (response.ok) {
+                    resultDiv.innerHTML = `
+                        <div class="result success">
+                            <h3>✅ Login Successful!</h3>
+                            <p><strong>User:</strong> ${data.user.username}</p>
+                            <p><strong>Token:</strong> ${data.access_token.substring(0, 50)}...</p>
+                            <p><strong>Container Status:</strong> ${data.user.container_status}</p>
+                            <p><a href="/static/index.html">Go to Dashboard</a></p>
+                        </div>
+                    `;
+
+                    // Store token like the real auth does
+                    localStorage.setItem('auth_token', data.access_token);
+                    localStorage.setItem('user_info', JSON.stringify(data.user));
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="result error">
+                            <h3>❌ Login Failed</h3>
+                            <p><strong>Status:</strong> ${response.status}</p>
+                            <p><strong>Error:</strong> ${data.error || 'Unknown error'}</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                resultDiv.innerHTML = `
+                    <div class="result error">
+                        <h3>❌ Network Error</h3>
+                        <p><strong>Error:</strong> ${error.message}</p>
+                        <p>Check console for details</p>
+                    </div>
+                `;
+            }
+        });
+
+        // Also test server connectivity
+        window.addEventListener('load', async () => {
+            try {
+                const health = await fetch('/health');
+                if (health.ok) {
+                    console.log('✅ Server health check passed');
+                } else {
+                    console.log('❌ Server health check failed:', health.status);
+                }
+            } catch (e) {
+                console.log('❌ Cannot connect to server:', e);
+            }
+        });
+    </script>
+</body>
+</html>
