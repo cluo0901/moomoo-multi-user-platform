@@ -33,6 +33,7 @@ class MoomooDashboard {
         this.setupEventListeners();
         this.setDefaultDates();
         this.setupUserInfo();
+        this.checkConnectionStatus(); // Check initial connection status
         this.loadDashboard();
     }
 
@@ -118,6 +119,26 @@ class MoomooDashboard {
         document.getElementById('credentialsForm').addEventListener('submit', (e) => {
             e.preventDefault();
             this.saveCredentials();
+        });
+
+        // Connection management events
+        document.getElementById('connectMoomooBtn').addEventListener('click', () => {
+            this.connectToMoomoo();
+        });
+        document.getElementById('disconnectMoomooBtn').addEventListener('click', () => {
+            this.disconnectFromMoomoo();
+        });
+
+        // SMS verification modal events
+        document.getElementById('closeSmsBtn').addEventListener('click', () => {
+            this.closeSmsModal();
+        });
+        document.getElementById('cancelSmsBtn').addEventListener('click', () => {
+            this.closeSmsModal();
+        });
+        document.getElementById('smsVerificationForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.submitSmsVerification();
         });
 
         // Logout functionality
@@ -497,13 +518,26 @@ class MoomooDashboard {
         alert(`Opening full ${type} view... (Feature to be implemented)`);
     }
 
-    openSettingsModal() {
+    async openSettingsModal() {
         const modal = document.getElementById('settingsModal');
         modal.classList.remove('hidden');
 
         // Reset form and hide status messages
         this.clearSettingsForm();
         this.hideSettingsMessages();
+
+        // Check if credentials are already configured
+        try {
+            const response = await this.makeAuthenticatedRequest(`${this.baseURL}/auth/user-settings`);
+            if (response.ok) {
+                const settings = await response.json();
+                if (settings.openapi_configured) {
+                    this.showSettingsSuccess('Moomoo credentials are already configured. You can update them below or click Cancel if no changes are needed.');
+                }
+            }
+        } catch (error) {
+            console.warn('Could not load user settings:', error);
+        }
     }
 
     closeSettingsModal() {
@@ -661,6 +695,280 @@ class MoomooDashboard {
             this.showSettingsError('Network error. Please try again.');
         } finally {
             this.setCredentialsSaving(false);
+        }
+    }
+
+    // Connection Management Methods
+    async connectToMoomoo() {
+        this.setConnectLoading(true);
+        this.hideConnectionMessages();
+
+        try {
+            const response = await this.makeAuthenticatedRequest(`${this.baseURL}/auth/connect-opend`, {
+                method: 'POST'
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                if (data.requires_sms_verification) {
+                    // SMS verification required
+                    this.showConnectionInfo('SMS verification required. Please check your phone for the verification code.');
+                    this.openSmsModal();
+                } else if (data.success) {
+                    // Connection successful
+                    this.showConnectionSuccess('Connected to moomoo successfully!');
+                    this.updateConnectionStatus('connected');
+                } else {
+                    this.showConnectionError(data.error || 'Failed to connect to moomoo');
+                }
+            } else {
+                this.showConnectionError(data.error || 'Failed to connect to moomoo');
+            }
+        } catch (error) {
+            this.showConnectionError('Error connecting to moomoo: ' + error.message);
+        } finally {
+            this.setConnectLoading(false);
+        }
+    }
+
+    async disconnectFromMoomoo() {
+        try {
+            const response = await this.makeAuthenticatedRequest(`${this.baseURL}/auth/disconnect-opend`, {
+                method: 'POST'
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                this.showConnectionSuccess('Disconnected from moomoo successfully!');
+                this.updateConnectionStatus('disconnected');
+            } else {
+                this.showConnectionError(data.error || 'Failed to disconnect from moomoo');
+            }
+        } catch (error) {
+            this.showConnectionError('Error disconnecting from moomoo: ' + error.message);
+        }
+    }
+
+    async submitSmsVerification() {
+        const smsCode = document.getElementById('smsCode').value.trim();
+
+        if (!smsCode || smsCode.length !== 6) {
+            this.showSmsError('Please enter a valid 6-digit SMS code');
+            return;
+        }
+
+        this.setSmsLoading(true);
+        this.hideSmsMessages();
+
+        try {
+            const response = await this.makeAuthenticatedRequest(`${this.baseURL}/auth/verify-sms`, {
+                method: 'POST',
+                body: JSON.stringify({ sms_code: smsCode })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                this.showSmsSuccess('SMS verification successful! Connected to moomoo.');
+                this.updateConnectionStatus('connected');
+                setTimeout(() => {
+                    this.closeSmsModal();
+                    this.loadDashboard(); // Refresh data
+                }, 2000);
+            } else {
+                this.showSmsError(data.error || 'SMS verification failed');
+            }
+        } catch (error) {
+            this.showSmsError('Error verifying SMS: ' + error.message);
+        } finally {
+            this.setSmsLoading(false);
+        }
+    }
+
+    // Connection Status Management
+    updateConnectionStatus(status) {
+        const indicator = document.getElementById('statusIndicator');
+        const text = document.getElementById('statusText');
+        const connectBtn = document.getElementById('connectMoomooBtn');
+        const disconnectBtn = document.getElementById('disconnectMoomooBtn');
+
+        switch (status) {
+            case 'connected':
+                indicator.className = 'w-3 h-3 rounded-full bg-green-500';
+                text.textContent = 'Connected';
+                text.className = 'text-sm font-medium text-green-600';
+                connectBtn.classList.add('hidden');
+                disconnectBtn.classList.remove('hidden');
+                break;
+            case 'connecting':
+                indicator.className = 'w-3 h-3 rounded-full bg-yellow-500';
+                text.textContent = 'Connecting...';
+                text.className = 'text-sm font-medium text-yellow-600';
+                connectBtn.disabled = true;
+                disconnectBtn.classList.add('hidden');
+                break;
+            case 'awaiting_sms':
+                indicator.className = 'w-3 h-3 rounded-full bg-blue-500';
+                text.textContent = 'Awaiting SMS Verification';
+                text.className = 'text-sm font-medium text-blue-600';
+                connectBtn.disabled = true;
+                disconnectBtn.classList.add('hidden');
+                break;
+            case 'error':
+                indicator.className = 'w-3 h-3 rounded-full bg-red-500';
+                text.textContent = 'Connection Error';
+                text.className = 'text-sm font-medium text-red-600';
+                connectBtn.disabled = false;
+                disconnectBtn.classList.add('hidden');
+                break;
+            default: // 'disconnected'
+                indicator.className = 'w-3 h-3 rounded-full bg-gray-400';
+                text.textContent = 'Disconnected';
+                text.className = 'text-sm font-medium text-gray-600';
+                connectBtn.disabled = false;
+                connectBtn.classList.remove('hidden');
+                disconnectBtn.classList.add('hidden');
+                break;
+        }
+    }
+
+    // SMS Modal Management
+    openSmsModal() {
+        const modal = document.getElementById('smsVerificationModal');
+        modal.classList.remove('hidden');
+
+        // Clear form and focus on input
+        document.getElementById('smsCode').value = '';
+        this.hideSmsMessages();
+        setTimeout(() => {
+            document.getElementById('smsCode').focus();
+        }, 100);
+    }
+
+    closeSmsModal() {
+        const modal = document.getElementById('smsVerificationModal');
+        modal.classList.add('hidden');
+
+        // Clear form
+        document.getElementById('smsCode').value = '';
+        this.hideSmsMessages();
+        this.setSmsLoading(false);
+    }
+
+    // Loading States
+    setConnectLoading(loading) {
+        const btn = document.getElementById('connectMoomooBtn');
+        const text = document.getElementById('connectBtnText');
+        const spinner = document.getElementById('connectBtnSpinner');
+
+        btn.disabled = loading;
+
+        if (loading) {
+            text.classList.add('hidden');
+            spinner.classList.remove('hidden');
+            this.updateConnectionStatus('connecting');
+        } else {
+            text.classList.remove('hidden');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    setSmsLoading(loading) {
+        const btn = document.getElementById('verifySmsBtn');
+        const text = document.getElementById('verifyBtnText');
+        const spinner = document.getElementById('verifyBtnSpinner');
+
+        btn.disabled = loading;
+
+        if (loading) {
+            text.classList.add('hidden');
+            spinner.classList.remove('hidden');
+        } else {
+            text.classList.remove('hidden');
+            spinner.classList.add('hidden');
+        }
+    }
+
+    // Message Management
+    hideConnectionMessages() {
+        document.getElementById('connectionMessages').classList.add('hidden');
+        document.getElementById('connectionSuccess').classList.add('hidden');
+        document.getElementById('connectionError').classList.add('hidden');
+        document.getElementById('connectionInfo').classList.add('hidden');
+    }
+
+    showConnectionSuccess(message) {
+        document.getElementById('connectionMessages').classList.remove('hidden');
+        document.getElementById('connectionSuccessMessage').textContent = message;
+        document.getElementById('connectionSuccess').classList.remove('hidden');
+        document.getElementById('connectionError').classList.add('hidden');
+        document.getElementById('connectionInfo').classList.add('hidden');
+    }
+
+    showConnectionError(message) {
+        document.getElementById('connectionMessages').classList.remove('hidden');
+        document.getElementById('connectionErrorMessage').textContent = message;
+        document.getElementById('connectionError').classList.remove('hidden');
+        document.getElementById('connectionSuccess').classList.add('hidden');
+        document.getElementById('connectionInfo').classList.add('hidden');
+    }
+
+    showConnectionInfo(message) {
+        document.getElementById('connectionMessages').classList.remove('hidden');
+        document.getElementById('connectionInfoMessage').textContent = message;
+        document.getElementById('connectionInfo').classList.remove('hidden');
+        document.getElementById('connectionSuccess').classList.add('hidden');
+        document.getElementById('connectionError').classList.add('hidden');
+    }
+
+    hideSmsMessages() {
+        document.getElementById('smsMessages').classList.add('hidden');
+        document.getElementById('smsSuccess').classList.add('hidden');
+        document.getElementById('smsError').classList.add('hidden');
+    }
+
+    showSmsSuccess(message) {
+        document.getElementById('smsMessages').classList.remove('hidden');
+        document.getElementById('smsSuccessMessage').textContent = message;
+        document.getElementById('smsSuccess').classList.remove('hidden');
+        document.getElementById('smsError').classList.add('hidden');
+    }
+
+    showSmsError(message) {
+        document.getElementById('smsMessages').classList.remove('hidden');
+        document.getElementById('smsErrorMessage').textContent = message;
+        document.getElementById('smsError').classList.remove('hidden');
+        document.getElementById('smsSuccess').classList.add('hidden');
+    }
+
+    // Connection Status Checking
+    async checkConnectionStatus() {
+        try {
+            const response = await this.makeAuthenticatedRequest(`${this.baseURL}/auth/connection-status`);
+
+            if (response.ok) {
+                const data = await response.json();
+                const connectionState = data.connection_state || 'disconnected';
+
+                if (data.awaiting_sms_verification) {
+                    this.updateConnectionStatus('awaiting_sms');
+                } else {
+                    this.updateConnectionStatus(connectionState);
+                }
+
+                // If there's an error, show it
+                if (data.error) {
+                    this.showConnectionError(data.error);
+                }
+            } else {
+                // If we can't get status, assume disconnected
+                this.updateConnectionStatus('disconnected');
+            }
+        } catch (error) {
+            console.warn('Failed to check connection status:', error);
+            this.updateConnectionStatus('disconnected');
         }
     }
 

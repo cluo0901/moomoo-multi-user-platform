@@ -336,7 +336,11 @@ class ContainerManager:
 
             # For local development, try to call the container's config API
             try:
-                user_id = container_id.replace('moomoo-user-', '')
+                if not container_id:
+                    print("Warning: Container ID is None, using 'alice' as default")
+                    user_id = 'alice'
+                else:
+                    user_id = container_id.replace('moomoo-user-', '') if 'moomoo-user-' in container_id else container_id
                 container_url = self.get_container_service_url(user_id)
 
                 # Transform config to match what the connector expects
@@ -464,8 +468,117 @@ class ContainerManager:
     def get_container_service_url(self, user_id):
         """Get the external/internal URL to access user's container API"""
         if not self.k8s_enabled:
-            # Docker Compose development mode - use container name
-            return f"http://moomoo-user-{user_id}:8000"
+            # Local development mode - platform runs on host, use localhost with mapped port
+            # For Docker Compose, we map container ports to host
+            if user_id == 'alice':
+                return "http://localhost:8001"  # Assuming Alice container is mapped to port 8001
+            elif user_id == 'bob':
+                return "http://localhost:8002"  # Assuming Bob container is mapped to port 8002
+            else:
+                # Generic mapping - use base port + user ID
+                try:
+                    port = 8000 + int(user_id)
+                    return f"http://localhost:{port}"
+                except:
+                    return f"http://localhost:8001"  # Default to Alice port
 
         # Production Kubernetes URL
         return self.get_container_url(user_id)
+
+    def initiate_opend_connection(self, container_id):
+        """Initiate OpenD connection in user's container"""
+        try:
+            import requests
+
+            # Get container service URL
+            container_url = self.get_container_service_url(container_id)
+            if not container_url:
+                return {'success': False, 'error': 'Container not accessible'}
+
+            # Call the container's connect endpoint
+            response = requests.post(f"{container_url}/connect", timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+                return data
+            else:
+                return {'success': False, 'error': f'Container connect failed: {response.status_code}'}
+
+        except Exception as e:
+            return {'success': False, 'error': f'Connection error: {str(e)}'}
+
+    def verify_sms_code(self, container_id, sms_code):
+        """Verify SMS code in user's container"""
+        try:
+            import requests
+
+            # Get container service URL
+            container_url = self.get_container_service_url(container_id)
+            if not container_url:
+                return {'success': False, 'error': 'Container not accessible'}
+
+            # Call the container's verify-sms endpoint
+            response = requests.post(
+                f"{container_url}/verify-sms",
+                json={'sms_code': sms_code},
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                return data
+            else:
+                return {'success': False, 'error': f'SMS verification failed: {response.status_code}'}
+
+        except Exception as e:
+            return {'success': False, 'error': f'SMS verification error: {str(e)}'}
+
+    def disconnect_opend(self, container_id):
+        """Disconnect OpenD in user's container"""
+        try:
+            import requests
+
+            # Get container service URL
+            container_url = self.get_container_service_url(container_id)
+            if not container_url:
+                return {'success': False, 'error': 'Container not accessible'}
+
+            # Call the container's disconnect endpoint
+            response = requests.post(f"{container_url}/disconnect", timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+                return data
+            else:
+                return {'success': False, 'error': f'Disconnect failed: {response.status_code}'}
+
+        except Exception as e:
+            return {'success': False, 'error': f'Disconnect error: {str(e)}'}
+
+    def get_connection_status(self, container_id):
+        """Get OpenD connection status from user's container"""
+        try:
+            import requests
+
+            # Get container service URL
+            container_url = self.get_container_service_url(container_id)
+            if not container_url:
+                return {'connection_state': 'error', 'error': 'Container not accessible'}
+
+            # Call the container's status endpoint
+            response = requests.get(f"{container_url}/status", timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    'connection_state': data.get('connection_state', 'disconnected'),
+                    'awaiting_sms_verification': data.get('awaiting_sms_verification', False),
+                    'process_running': data.get('process_running', False),
+                    'configured': data.get('configured', False),
+                    'last_error': data.get('last_error')
+                }
+            else:
+                return {'connection_state': 'error', 'error': f'Status check failed: {response.status_code}'}
+
+        except Exception as e:
+            return {'connection_state': 'error', 'error': f'Status check error: {str(e)}'}

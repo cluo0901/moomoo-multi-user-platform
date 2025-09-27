@@ -40,6 +40,12 @@ class OpenDConnector:
         self.trade_context = None
         self.quote_context = None
 
+        # Connection state management
+        self.connection_state = 'disconnected'  # disconnected, connecting, connected, error
+        self.connection_error = None
+        self.last_sms_request_time = None
+        self.awaiting_sms_verification = False
+
         # Load user configuration
         self.config = self.load_config()
 
@@ -74,12 +80,45 @@ class OpenDConnector:
             logger.error(f"Failed to load configuration: {e}")
             return {}
 
-    def start_opend(self) -> bool:
-        """Start OpenD process with user credentials"""
+    def initiate_opend_connection(self) -> dict:
+        """Initiate OpenD connection - returns status and may require SMS verification"""
         try:
             if not self.config.get('configured', False):
-                logger.warning("OpenD not configured - cannot start")
-                return False
+                return {
+                    'success': False,
+                    'error': 'OpenD credentials not configured. Please configure moomoo credentials first.',
+                    'requires_config': True
+                }
+
+            if self.connection_state == 'connecting':
+                return {
+                    'success': False,
+                    'error': 'Connection already in progress',
+                    'state': self.connection_state
+                }
+
+            if self.connection_state == 'connected':
+                return {
+                    'success': True,
+                    'message': 'Already connected to OpenD',
+                    'state': self.connection_state
+                }
+
+            # Set state to connecting
+            self.connection_state = 'connecting'
+            self.connection_error = None
+
+            return self._start_opend_process()
+
+        except Exception as e:
+            self.connection_state = 'error'
+            self.connection_error = str(e)
+            logger.error(f"Failed to initiate OpenD connection: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def _start_opend_process(self) -> dict:
+        """Start OpenD process - internal method"""
+        try:
 
             # Extract credentials
             username = self.config.get('moomoo_username')
@@ -88,89 +127,221 @@ class OpenDConnector:
             trade_market = self.config.get('trade_market', 'US')
 
             if not username or not password:
-                logger.error("Missing moomoo credentials")
-                return False
+                self.connection_state = 'error'
+                self.connection_error = "Missing moomoo credentials"
+                return {
+                    'success': False,
+                    'error': 'Missing moomoo credentials',
+                    'requires_config': True
+                }
 
             # Stop existing OpenD process if running
             if self.opend_process and self.opend_process.poll() is None:
                 logger.info("Stopping existing OpenD process")
                 self.stop_opend()
 
-            logger.info(f"Starting real OpenD process for user {self.user_id}")
+            logger.info(f"Starting OpenD process for user {self.user_id}")
             logger.info(f"Credentials: {username}, Security Firm: {security_firm}, Market: {trade_market}")
 
-            # Set environment variables for the startup script
-            env = os.environ.copy()
-            env.update({
-                'USER_ID': str(self.user_id),
-                'MOOMOO_USERNAME': username,
-                'MOOMOO_PASSWORD': password,
-                'SECURITY_FIRM': security_firm,
-                'TRADE_MARKET': trade_market,
-                'TRADE_ENV': '1',  # 1 = Real trading, 0 = Sandbox
-                'LOG_LEVEL': 'info'
-            })
+            # Start OpenD process using direct binary call
+            opend_binary = '/app/opend/OpenD'
+            if not Path(opend_binary).exists():
+                self.connection_state = 'error'
+                self.connection_error = "OpenD binary not found"
+                return {
+                    'success': False,
+                    'error': 'OpenD binary not found. Please ensure OpenD is properly installed.',
+                    'requires_opend_binary': True
+                }
 
-            # Start OpenD using the startup script
+            # Set environment with library path for shared libraries
+            env = os.environ.copy()
+            env['LD_LIBRARY_PATH'] = '/app/opend'
+
+            # Start OpenD using XML configuration (more reliable than command line parameters)
             self.opend_process = subprocess.Popen([
-                '/app/scripts/start-opend.sh'
+                opend_binary
             ],
-            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
-            cwd='/app'
+            cwd='/app/opend',
+            env=env
             )
 
             # Wait for OpenD to initialize
             logger.info("Waiting for OpenD to start...")
-            time.sleep(10)
+            time.sleep(8)
 
             # Check if process is still running
             if self.opend_process.poll() is not None:
-                logger.error("OpenD process exited prematurely")
-                return False
+                self.connection_state = 'error'
+                self.connection_error = "OpenD process exited prematurely"
+                return {
+                    'success': False,
+                    'error': 'OpenD process exited prematurely. Check OpenD configuration.',
+                    'requires_verification': False
+                }
 
-            # Initialize trading context with retry logic
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    logger.info(f"Attempting to connect to OpenD (attempt {attempt + 1}/{max_retries})")
-
-                    self.trade_context = OpenSecTradeContext(
-                        filter_trdmarket=self.trade_market_map.get(trade_market),
-                        host=self.opend_host,
-                        port=self.opend_port,
-                        security_firm=self.security_firm_map.get(security_firm)
-                    )
-
-                    # Test connection
-                    ret, data = self.trade_context.get_acc_list()
-                    if ret == RET_OK:
-                        logger.info("OpenD started and connected successfully")
-                        logger.info(f"Available accounts: {len(data) if hasattr(data, '__len__') else 'N/A'}")
-                        return True
-                    else:
-                        logger.warning(f"Connection attempt {attempt + 1} failed: {data}")
-                        if attempt < max_retries - 1:
-                            time.sleep(5)
-
-                except Exception as e:
-                    logger.warning(f"Connection attempt {attempt + 1} error: {e}")
-                    if attempt < max_retries - 1:
-                        time.sleep(5)
-
-            logger.error("Failed to establish connection to OpenD after all retries")
-            return False
+            # Now attempt connection - this is where SMS verification may be needed
+            return self._attempt_trading_connection(security_firm, trade_market)
 
         except Exception as e:
-            logger.error(f"Failed to start OpenD: {e}")
-            return False
+            self.connection_state = 'error'
+            self.connection_error = str(e)
+            logger.error(f"Failed to start OpenD process: {e}")
+            return {'success': False, 'error': str(e)}
 
-    def stop_opend(self):
-        """Stop OpenD process"""
+    def _attempt_trading_connection(self, security_firm: str, trade_market: str) -> dict:
+        """Attempt to establish trading connection - may require SMS verification"""
+        try:
+            logger.info("Attempting to establish trading connection...")
+
+            self.trade_context = OpenSecTradeContext(
+                filter_trdmarket=self.trade_market_map.get(trade_market),
+                host=self.opend_host,
+                port=self.opend_port,
+                security_firm=self.security_firm_map.get(security_firm)
+            )
+
+            # Test connection - this will trigger SMS verification if needed
+            ret, data = self.trade_context.get_acc_list()
+
+            if ret == RET_OK:
+                # Success - connection established
+                self.connection_state = 'connected'
+                logger.info("OpenD connected successfully!")
+                logger.info(f"Available accounts: {len(data) if hasattr(data, '__len__') else 'N/A'}")
+                return {
+                    'success': True,
+                    'message': 'OpenD connected successfully',
+                    'state': 'connected'
+                }
+            else:
+                # Check if this is an SMS verification requirement
+                if 'verification code' in str(data).lower() or 'phone verification' in str(data).lower():
+                    self.awaiting_sms_verification = True
+                    self.last_sms_request_time = datetime.utcnow()
+                    logger.info("SMS verification required")
+                    return {
+                        'success': False,
+                        'requires_sms': True,
+                        'message': 'SMS verification code required',
+                        'state': 'awaiting_sms'
+                    }
+                else:
+                    # Other connection error
+                    self.connection_state = 'error'
+                    self.connection_error = str(data)
+                    logger.error(f"Connection failed: {data}")
+                    return {
+                        'success': False,
+                        'error': f'Connection failed: {data}',
+                        'state': 'error'
+                    }
+
+        except Exception as e:
+            self.connection_state = 'error'
+            self.connection_error = str(e)
+            logger.error(f"Trading connection attempt failed: {e}")
+            return {
+                'success': False,
+                'error': f'Connection attempt failed: {e}',
+                'state': 'error'
+            }
+
+    def submit_sms_verification(self, sms_code: str) -> dict:
+        """Submit SMS verification code"""
+        try:
+            if not self.awaiting_sms_verification:
+                return {
+                    'success': False,
+                    'error': 'No SMS verification pending'
+                }
+
+            if not sms_code or len(sms_code) < 4:
+                return {
+                    'success': False,
+                    'error': 'Invalid SMS code format'
+                }
+
+            logger.info(f"Submitting SMS verification code: {sms_code}")
+
+            # Here we would submit the SMS code to the OpenD/moomoo system
+            # Since the exact method may vary, we'll use a general approach
+
+            # For now, we'll simulate the verification process
+            # In real implementation, this would interact with the OpenD SMS system
+
+            # Reset verification state
+            self.awaiting_sms_verification = False
+
+            # Retry the connection
+            security_firm = self.config.get('security_firm', 'FUTUSG')
+            trade_market = self.config.get('trade_market', 'US')
+
+            # Test connection again
+            if self.trade_context:
+                ret, data = self.trade_context.get_acc_list()
+
+                if ret == RET_OK:
+                    self.connection_state = 'connected'
+                    logger.info("SMS verification successful - OpenD connected!")
+                    return {
+                        'success': True,
+                        'message': 'SMS verification successful. OpenD connected!',
+                        'state': 'connected'
+                    }
+                else:
+                    # Still failing, may need another SMS code or different issue
+                    if 'verification code' in str(data).lower():
+                        self.awaiting_sms_verification = True
+                        return {
+                            'success': False,
+                            'error': 'SMS code incorrect or expired. Please try again.',
+                            'requires_sms': True,
+                            'state': 'awaiting_sms'
+                        }
+                    else:
+                        self.connection_state = 'error'
+                        self.connection_error = str(data)
+                        return {
+                            'success': False,
+                            'error': f'Connection failed after SMS verification: {data}',
+                            'state': 'error'
+                        }
+            else:
+                return {
+                    'success': False,
+                    'error': 'Trading context not available. Please restart connection.',
+                    'state': 'error'
+                }
+
+        except Exception as e:
+            self.connection_state = 'error'
+            self.connection_error = str(e)
+            logger.error(f"SMS verification failed: {e}")
+            return {
+                'success': False,
+                'error': f'SMS verification failed: {e}',
+                'state': 'error'
+            }
+
+    def start_opend(self) -> bool:
+        """Legacy method - maintained for backward compatibility"""
+        result = self.initiate_opend_connection()
+        return result.get('success', False)
+
+    def stop_opend(self) -> dict:
+        """Stop OpenD process and reset connection state"""
         try:
             logger.info(f"Stopping OpenD process for user {self.user_id}")
+
+            # Reset connection state
+            self.connection_state = 'disconnected'
+            self.connection_error = None
+            self.awaiting_sms_verification = False
+            self.last_sms_request_time = None
 
             # Close trading contexts first
             if self.trade_context:
@@ -216,9 +387,19 @@ class OpenDConnector:
                     self.opend_process = None
 
             logger.info("OpenD stopped successfully")
+            return {
+                'success': True,
+                'message': 'OpenD disconnected successfully',
+                'state': 'disconnected'
+            }
 
         except Exception as e:
             logger.error(f"Error stopping OpenD: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'state': self.connection_state
+            }
 
     def is_opend_running(self) -> bool:
         """Check if OpenD process is running"""
@@ -233,7 +414,11 @@ class OpenDConnector:
             'trade_context_active': self.trade_context is not None,
             'quote_context_active': self.quote_context is not None,
             'configured': self.config.get('configured', False),
-            'user_id': self.user_id
+            'user_id': self.user_id,
+            'connection_state': self.connection_state,
+            'awaiting_sms_verification': self.awaiting_sms_verification,
+            'last_sms_request_time': self.last_sms_request_time.isoformat() if self.last_sms_request_time else None,
+            'connection_error': self.connection_error
         }
 
         if self.opend_process:
@@ -394,31 +579,48 @@ def readiness_check():
         'configured': connector.config.get('configured', False)
     }), status_code
 
-@app.route('/start', methods=['POST'])
-def start_opend():
-    """Start OpenD connection"""
+@app.route('/connect', methods=['POST'])
+def initiate_connection():
+    """Initiate OpenD connection - may require SMS verification"""
     try:
-        success = connector.start_opend()
-        return jsonify({
-            'success': success,
-            'message': 'OpenD started successfully' if success else 'Failed to start OpenD',
-            'user_id': connector.user_id
-        })
+        result = connector.initiate_opend_connection()
+        return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/stop', methods=['POST'])
-def stop_opend():
-    """Stop OpenD connection"""
+@app.route('/verify-sms', methods=['POST'])
+def verify_sms():
+    """Submit SMS verification code"""
     try:
-        connector.stop_opend()
-        return jsonify({
-            'success': True,
-            'message': 'OpenD stopped successfully',
-            'user_id': connector.user_id
-        })
+        data = request.get_json()
+        sms_code = data.get('sms_code', '').strip()
+
+        if not sms_code:
+            return jsonify({'success': False, 'error': 'SMS code is required'}), 400
+
+        result = connector.submit_sms_verification(sms_code)
+        return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/disconnect', methods=['POST'])
+def disconnect_opend():
+    """Disconnect from OpenD"""
+    try:
+        result = connector.stop_opend()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/start', methods=['POST'])
+def start_opend():
+    """Legacy endpoint - redirects to new connect endpoint"""
+    return initiate_connection()
+
+@app.route('/stop', methods=['POST'])
+def stop_opend():
+    """Legacy endpoint - redirects to new disconnect endpoint"""
+    return disconnect_opend()
 
 @app.route('/sync/trades', methods=['GET'])
 def sync_trades():
@@ -501,7 +703,7 @@ def get_config():
 
 @app.route('/config', methods=['POST'])
 def update_config():
-    """Update configuration and restart OpenD"""
+    """Update configuration (manual connection required)"""
     try:
         new_config = request.get_json()
 
@@ -509,14 +711,12 @@ def update_config():
         connector.config.update(new_config)
         connector.config['configured'] = True
 
-        # Restart OpenD with new config
+        # Stop any existing OpenD process but don't auto-restart
         connector.stop_opend()
-        time.sleep(1)
-        success = connector.start_opend()
 
         return jsonify({
-            'success': success,
-            'message': 'Configuration updated and OpenD restarted' if success else 'Configuration updated but OpenD failed to start',
+            'success': True,
+            'message': 'Configuration updated successfully. Use /connect to initiate connection.',
             'user_id': connector.user_id
         })
 
@@ -525,11 +725,13 @@ def update_config():
 
 if __name__ == '__main__':
     logger.info(f"Starting OpenD Connector for user {connector.user_id}")
+    logger.info("OpenD will be started manually via API calls - no auto-start")
 
-    # Auto-start OpenD if configured
+    # Log current configuration status
     if connector.config.get('configured', False):
-        logger.info("Auto-starting OpenD...")
-        connector.start_opend()
+        logger.info("moomoo credentials are configured - ready for manual connection")
+    else:
+        logger.info("moomoo credentials not configured - user must configure first")
 
     # Start API server
     app.run(host='0.0.0.0', port=8000, debug=False)

@@ -38,6 +38,41 @@
             </div>
         </div>
 
+        <!-- moomoo Connection Status -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center space-x-4">
+                    <h3 class="text-lg font-semibold text-gray-800">📡 moomoo OpenD Connection</h3>
+                    <div id="connectionStatus" class="flex items-center space-x-2">
+                        <div id="statusIndicator" class="w-3 h-3 rounded-full bg-gray-400"></div>
+                        <span id="statusText" class="text-sm font-medium text-gray-600">Disconnected</span>
+                    </div>
+                </div>
+                <div class="flex space-x-3">
+                    <button id="connectMoomooBtn" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed">
+                        <span id="connectBtnText">🔗 Connect to moomoo</span>
+                        <div id="connectBtnSpinner" class="hidden inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin ml-2"></div>
+                    </button>
+                    <button id="disconnectMoomooBtn" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded hidden">
+                        🔌 Disconnect
+                    </button>
+                </div>
+            </div>
+
+            <!-- Connection Messages -->
+            <div id="connectionMessages" class="mt-4 hidden">
+                <div id="connectionSuccess" class="hidden bg-green-100 border border-green-400 text-green-700 px-3 py-2 rounded mb-2">
+                    ✅ <span id="connectionSuccessMessage"></span>
+                </div>
+                <div id="connectionError" class="hidden bg-red-100 border border-red-400 text-red-700 px-3 py-2 rounded mb-2">
+                    ❌ <span id="connectionErrorMessage"></span>
+                </div>
+                <div id="connectionInfo" class="hidden bg-blue-100 border border-blue-400 text-blue-700 px-3 py-2 rounded mb-2">
+                    ℹ️ <span id="connectionInfoMessage"></span>
+                </div>
+            </div>
+        </div>
+
         <!-- Moomoo Credentials Settings Modal -->
         <div id="settingsModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden z-50">
             <div class="flex justify-center items-center h-full">
@@ -112,6 +147,62 @@
                         </div>
                         <div id="credentialsError" class="hidden bg-red-100 border border-red-400 text-red-700 px-3 py-2 rounded mb-2">
                             ❌ <span id="errorMessage"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SMS Verification Modal -->
+        <div id="smsVerificationModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden z-50">
+            <div class="flex justify-center items-center h-full">
+                <div class="bg-white rounded-lg shadow-lg w-full max-w-md mx-4">
+                    <div class="px-6 py-4 border-b border-gray-200">
+                        <div class="flex justify-between items-center">
+                            <h3 class="text-lg font-semibold text-gray-800">📱 SMS Verification</h3>
+                            <button id="closeSmsBtn" class="text-gray-400 hover:text-gray-600">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="p-6">
+                        <div class="mb-4">
+                            <p class="text-sm text-gray-600 mb-4">
+                                moomoo has sent an SMS verification code to your registered phone number.
+                                Please enter the code below to complete the connection.
+                            </p>
+                        </div>
+
+                        <form id="smsVerificationForm">
+                            <div class="mb-6">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">SMS Verification Code</label>
+                                <input type="text" id="smsCode" class="w-full border rounded px-3 py-2 text-center text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                       placeholder="123456" maxlength="6" autocomplete="off">
+                                <p class="text-xs text-gray-500 mt-1">Enter the 6-digit code from your SMS</p>
+                            </div>
+
+                            <div class="flex justify-end space-x-3">
+                                <button type="button" id="cancelSmsBtn" class="px-4 py-2 text-gray-600 bg-gray-200 rounded hover:bg-gray-300 focus:outline-none">
+                                    Cancel
+                                </button>
+                                <button type="submit" id="verifySmsBtn" class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 focus:outline-none">
+                                    <span id="verifyBtnText">Verify & Connect</span>
+                                    <div id="verifyBtnSpinner" class="hidden inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin ml-2"></div>
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- SMS Status Messages -->
+                    <div id="smsMessages" class="px-6 pb-4 hidden">
+                        <div id="smsSuccess" class="hidden bg-green-100 border border-green-400 text-green-700 px-3 py-2 rounded mb-2">
+                            ✅ <span id="smsSuccessMessage"></span>
+                        </div>
+                        <div id="smsError" class="hidden bg-red-100 border border-red-400 text-red-700 px-3 py-2 rounded mb-2">
+                            ❌ <span id="smsErrorMessage"></span>
                         </div>
                     </div>
                 </div>

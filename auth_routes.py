@@ -96,6 +96,12 @@ def login():
         if not user.is_active:
             return jsonify({'error': 'Account is deactivated'}), 401
 
+        # Ensure user has a container_id (for backwards compatibility)
+        if not user.container_id:
+            user.container_id = f"alice"  # Use alice for local development
+            user.container_status = 'running'  # Set as running for local dev
+            print(f"Assigned container_id 'alice' to user {user.username}")
+
         # Update last login
         user.last_login = datetime.utcnow()
         db.session.commit()
@@ -280,3 +286,147 @@ def configure_opend():
 def logout():
     """Logout user (client-side token removal)"""
     return jsonify({'message': 'Logout successful'})
+
+@auth_bp.route('/user-settings', methods=['GET'])
+@jwt_required()
+def get_user_settings():
+    """Get current user settings and credentials"""
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(int(user_id))
+
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        return jsonify({
+            'openapi_configured': user.openapi_configured,
+            'container_id': user.container_id,
+            'container_status': user.container_status,
+            'last_sync': user.last_sync.isoformat() if user.last_sync else None
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/connect-opend', methods=['POST'])
+@jwt_required()
+def connect_opend():
+    """Initiate OpenD connection for user's container"""
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(int(user_id))
+
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        if not user.openapi_configured:
+            return jsonify({
+                'success': False,
+                'error': 'moomoo credentials not configured. Please configure your credentials in Settings first.',
+                'requires_config': True
+            }), 400
+
+        # Use container manager to initiate connection
+        result = container_mgr.initiate_opend_connection(user.container_id)
+
+        if result.get('success'):
+            if result.get('requires_sms_verification'):
+                return jsonify({
+                    'success': True,
+                    'requires_sms_verification': True,
+                    'message': 'SMS verification required. Please check your phone for the verification code.'
+                })
+            else:
+                return jsonify({
+                    'success': True,
+                    'message': 'Connected to moomoo successfully!'
+                })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Failed to initiate OpenD connection')
+            }), 400
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/verify-sms', methods=['POST'])
+@jwt_required()
+def verify_sms():
+    """Submit SMS verification code for OpenD connection"""
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(int(user_id))
+
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        data = request.get_json()
+        sms_code = data.get('sms_code')
+
+        if not sms_code:
+            return jsonify({'error': 'SMS code is required'}), 400
+
+        # Use container manager to verify SMS code
+        result = container_mgr.verify_sms_code(user.container_id, sms_code)
+
+        if result.get('success'):
+            return jsonify({
+                'success': True,
+                'message': 'SMS verification successful! Connected to moomoo.'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'SMS verification failed')
+            }), 400
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/disconnect-opend', methods=['POST'])
+@jwt_required()
+def disconnect_opend():
+    """Disconnect OpenD for user's container"""
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(int(user_id))
+
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Use container manager to disconnect
+        result = container_mgr.disconnect_opend(user.container_id)
+
+        if result.get('success'):
+            return jsonify({
+                'success': True,
+                'message': 'Disconnected from moomoo successfully!'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Failed to disconnect from moomoo')
+            }), 400
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/connection-status', methods=['GET'])
+@jwt_required()
+def get_connection_status():
+    """Get current OpenD connection status for user's container"""
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(int(user_id))
+
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Use container manager to get status
+        result = container_mgr.get_connection_status(user.container_id)
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

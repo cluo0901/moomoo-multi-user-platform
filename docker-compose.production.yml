@@ -236,6 +236,8 @@ services:
       dockerfile: Dockerfile
     platform: linux/amd64  # Force x86_64 architecture for OpenD binary compatibility
     container_name: moomoo-user-alice
+    ports:
+      - "8001:8000"  # Map container port 8000 to host port 8001
     environment:
       USER_ID: alice
       USER_NAME: alice
