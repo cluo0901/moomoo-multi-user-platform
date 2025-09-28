@@ -102,6 +102,14 @@ def login():
             user.container_status = 'running'  # Set as running for local dev
             print(f"Assigned container_id 'alice' to user {user.username}")
 
+        # Clean up any existing connections for fresh start
+        if user.container_id:
+            try:
+                cleanup_result = container_mgr.cleanup_all_connections(user.container_id)
+                print(f"Login cleanup for {user.username}: {cleanup_result.get('message', 'completed')}")
+            except Exception as e:
+                print(f"Warning: Login cleanup failed for user {user.username}: {e}")
+
         # Update last login
         user.last_login = datetime.utcnow()
         db.session.commit()
@@ -305,8 +313,31 @@ def configure_opend():
 @auth_bp.route('/logout', methods=['POST'])
 @jwt_required()
 def logout():
-    """Logout user (client-side token removal)"""
-    return jsonify({'message': 'Logout successful'})
+    """Logout user and cleanup all connections"""
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(int(user_id))
+
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Clean up all OpenD connections and SMS state
+        cleanup_results = []
+        if user.container_id:
+            try:
+                result = container_mgr.cleanup_all_connections(user.container_id)
+                cleanup_results.append(result)
+            except Exception as e:
+                print(f"Warning: Failed to cleanup connections for user {user.username}: {e}")
+                cleanup_results.append({'success': False, 'error': str(e)})
+
+        return jsonify({
+            'message': 'Logout successful - all connections cleaned up',
+            'cleanup_results': cleanup_results
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/user-settings', methods=['GET'])
 @jwt_required()

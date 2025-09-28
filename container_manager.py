@@ -555,6 +555,48 @@ class ContainerManager:
         except Exception as e:
             return {'success': False, 'error': f'Disconnect error: {str(e)}'}
 
+    def reset_sms_state(self, container_id):
+        """Reset SMS verification state in user's container"""
+        try:
+            import requests
+
+            # Get container service URL
+            container_url = self.get_container_service_url(container_id)
+            if not container_url:
+                return {'success': False, 'error': 'Container not accessible'}
+
+            # Call the container's reset-sms endpoint
+            response = requests.post(f"{container_url}/reset-sms", timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+                return data
+            else:
+                return {'success': False, 'error': f'SMS reset failed: {response.status_code}'}
+
+        except Exception as e:
+            return {'success': False, 'error': f'SMS reset error: {str(e)}'}
+
+    def cleanup_all_connections(self, container_id):
+        """Disconnect OpenD and reset SMS state for clean logout"""
+        results = []
+
+        # First disconnect OpenD
+        disconnect_result = self.disconnect_opend(container_id)
+        results.append(('disconnect', disconnect_result))
+
+        # Then reset SMS state
+        reset_result = self.reset_sms_state(container_id)
+        results.append(('reset_sms', reset_result))
+
+        # Return combined results
+        success = all(result[1].get('success', False) for result in results)
+        return {
+            'success': success,
+            'results': results,
+            'message': 'All connections cleaned up successfully' if success else 'Some cleanup operations failed'
+        }
+
     def get_connection_status(self, container_id):
         """Get OpenD connection status from user's container"""
         try:

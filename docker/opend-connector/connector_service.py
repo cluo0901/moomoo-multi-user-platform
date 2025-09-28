@@ -80,7 +80,7 @@ class OpenDConnector:
             logger.error(f"Failed to load configuration: {e}")
             return {}
 
-    def initiate_opend_connection(self) -> dict:
+    def initiate_opend_connection(self, force_reconnect: bool = False) -> dict:
         """Initiate OpenD connection - returns status and may require SMS verification"""
         try:
             if not self.config.get('configured', False):
@@ -89,6 +89,25 @@ class OpenDConnector:
                     'error': 'OpenD credentials not configured. Please configure moomoo credentials first.',
                     'requires_config': True
                 }
+
+            # Check for expired SMS verification
+            if self._is_sms_verification_expired():
+                logger.info("SMS verification expired, resetting state")
+                self._reset_sms_state()
+
+            # Handle awaiting_sms state
+            if self.connection_state == 'awaiting_sms':
+                if force_reconnect:
+                    logger.info("Force reconnect requested, resetting SMS state")
+                    self._reset_sms_state()
+                else:
+                    # Return existing SMS verification requirement
+                    return {
+                        'success': False,
+                        'requires_sms_verification': True,
+                        'message': 'SMS verification code required. Please check your phone for the verification code.',
+                        'state': 'awaiting_sms'
+                    }
 
             if self.connection_state == 'connecting':
                 return {
@@ -214,8 +233,8 @@ class OpenDConnector:
                 return_code = self.opend_process.returncode
 
                 # Check if this is due to SMS verification requirement
-                # Return codes 12, 14 often indicate SMS verification needed
-                if return_code in [12, 14]:
+                # Return codes -5, 12, 14 often indicate SMS verification needed
+                if return_code in [-5, 12, 14]:
                     self.awaiting_sms_verification = True
                     self.last_sms_request_time = datetime.utcnow()
                     self.connection_state = 'awaiting_sms'
@@ -660,10 +679,60 @@ class OpenDConnector:
             logger.error(f"Error checking SMS logs: {e}")
             return False
 
+    def _is_opend_waiting_for_sms(self) -> bool:
+        """Check if OpenD process is currently waiting for SMS verification"""
+        try:
+            # Check if OpenD process is running and potentially waiting for SMS
+            if not self.process_running:
+                return False
+
+            # If we have an active OpenSecTradeContext but can't perform operations,
+            # it might be waiting for SMS verification
+            if self.trade_context:
+                try:
+                    # Try a simple API call that would fail if SMS verification is needed
+                    ret, _ = self.trade_context.get_acc_list()
+                    if ret == RET_ERROR:
+                        # Could be waiting for SMS verification
+                        return True
+                except Exception:
+                    # Exception might indicate SMS verification needed
+                    return True
+
+            return False
+        except Exception as e:
+            logger.error(f"Error checking if OpenD waiting for SMS: {e}")
+            return False
+
+    def _is_sms_verification_expired(self) -> bool:
+        """Check if SMS verification has expired (5 minutes timeout)"""
+        if not self.awaiting_sms_verification or not self.last_sms_request_time:
+            return False
+
+        from datetime import datetime, timedelta
+        timeout_duration = timedelta(minutes=5)
+        return datetime.utcnow() - self.last_sms_request_time > timeout_duration
+
+    def _reset_sms_state(self):
+        """Reset SMS verification state to allow fresh connection attempts"""
+        logger.info("Resetting SMS verification state")
+        self.awaiting_sms_verification = False
+        self.last_sms_request_time = None
+        if self.connection_state == 'awaiting_sms':
+            self.connection_state = 'disconnected'
+        self.connection_error = None
+
     def submit_sms_verification(self, sms_code: str) -> dict:
         """Submit SMS verification code"""
         try:
-            if not self.awaiting_sms_verification:
+            # Check if SMS verification is needed - more robust check
+            sms_needed = (
+                self.awaiting_sms_verification or
+                self._check_sms_required_in_logs() or
+                self._is_opend_waiting_for_sms()
+            )
+
+            if not sms_needed:
                 return {
                     'success': False,
                     'error': 'No SMS verification pending'
@@ -993,7 +1062,11 @@ def readiness_check():
 def initiate_connection():
     """Initiate OpenD connection - may require SMS verification"""
     try:
-        result = connector.initiate_opend_connection()
+        # Check for force_reconnect parameter
+        data = request.get_json() if request.content_type == 'application/json' else {}
+        force_reconnect = data.get('force_reconnect', False) if data else False
+
+        result = connector.initiate_opend_connection(force_reconnect=force_reconnect)
         return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1019,6 +1092,18 @@ def disconnect_opend():
     try:
         result = connector.stop_opend()
         return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/reset-sms', methods=['POST'])
+def reset_sms_state():
+    """Reset SMS verification state to allow fresh connection attempts"""
+    try:
+        connector._reset_sms_state()
+        return jsonify({
+            'success': True,
+            'message': 'SMS verification state reset. You can now attempt a fresh connection.'
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
