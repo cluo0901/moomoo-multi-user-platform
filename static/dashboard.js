@@ -58,8 +58,8 @@ class MoomooDashboard {
                 `;
 
                 // Add logout functionality
-                document.getElementById('logoutBtn').addEventListener('click', () => {
-                    this.logout();
+                document.getElementById('logoutBtn').addEventListener('click', async () => {
+                    await this.logout();
                 });
             }
         }
@@ -972,7 +972,17 @@ class MoomooDashboard {
         }
     }
 
-    logout() {
+    async logout() {
+        try {
+            // Call backend logout endpoint to cleanup connections
+            await this.makeAuthenticatedRequest(`${this.baseURL}/auth/logout`, {
+                method: 'POST'
+            });
+        } catch (error) {
+            console.warn('Logout cleanup failed:', error);
+            // Continue with logout even if cleanup fails
+        }
+
         localStorage.removeItem('auth_token');
         localStorage.removeItem('user_info');
         window.location.href = '/static/auth.html';
