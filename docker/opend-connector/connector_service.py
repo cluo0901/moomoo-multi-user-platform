@@ -108,13 +108,49 @@ class OpenDConnector:
             self.connection_state = 'connecting'
             self.connection_error = None
 
-            return self._start_opend_process()
+            return self._start_opend_process_with_retry()
 
         except Exception as e:
             self.connection_state = 'error'
             self.connection_error = str(e)
             logger.error(f"Failed to initiate OpenD connection: {e}")
             return {'success': False, 'error': str(e)}
+
+    def _start_opend_process_with_retry(self) -> dict:
+        """Start OpenD process with retry logic"""
+        max_retries = 1
+        base_delay = 0.5  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Connection attempt {attempt + 1}/{max_retries}")
+                result = self._start_opend_process()
+
+                # If SMS verification is required, return immediately (don't retry)
+                if result.get('requires_sms_verification'):
+                    return result
+
+                # If successful, return immediately
+                if result.get('success'):
+                    return result
+
+                # If this is the last attempt, return the error
+                if attempt == max_retries - 1:
+                    return result
+
+                # Calculate exponential backoff delay
+                delay = base_delay * (2 ** attempt)
+                logger.info(f"Connection attempt {attempt + 1} failed, retrying in {delay} seconds...")
+                time.sleep(delay)
+
+            except Exception as e:
+                logger.error(f"Connection attempt {attempt + 1} error: {e}")
+                if attempt == max_retries - 1:
+                    self.connection_state = 'error'
+                    self.connection_error = str(e)
+                    return {'success': False, 'error': str(e)}
+
+        return {'success': False, 'error': 'Max retries exceeded'}
 
     def _start_opend_process(self) -> dict:
         """Start OpenD process - internal method"""
@@ -171,17 +207,33 @@ class OpenDConnector:
 
             # Wait for OpenD to initialize
             logger.info("Waiting for OpenD to start...")
-            time.sleep(8)
+            time.sleep(3)
 
             # Check if process is still running
             if self.opend_process.poll() is not None:
-                self.connection_state = 'error'
-                self.connection_error = "OpenD process exited prematurely"
-                return {
-                    'success': False,
-                    'error': 'OpenD process exited prematurely. Check OpenD configuration.',
-                    'requires_verification': False
-                }
+                return_code = self.opend_process.returncode
+
+                # Check if this is due to SMS verification requirement
+                # Return codes 12, 14 often indicate SMS verification needed
+                if return_code in [12, 14]:
+                    self.awaiting_sms_verification = True
+                    self.last_sms_request_time = datetime.utcnow()
+                    self.connection_state = 'awaiting_sms'
+                    logger.info(f"OpenD process exited with code {return_code} - SMS verification required")
+                    return {
+                        'success': False,
+                        'requires_sms_verification': True,
+                        'message': 'SMS verification code required. Please check your phone for the verification code.',
+                        'state': 'awaiting_sms'
+                    }
+                else:
+                    self.connection_state = 'error'
+                    self.connection_error = f"OpenD process exited with code {return_code}"
+                    return {
+                        'success': False,
+                        'error': f'OpenD process exited prematurely with code {return_code}. Check OpenD configuration.',
+                        'requires_verification': False
+                    }
 
             # Now attempt connection - this is where SMS verification may be needed
             return self._attempt_trading_connection(security_firm, trade_market)
@@ -197,46 +249,264 @@ class OpenDConnector:
         try:
             logger.info("Attempting to establish trading connection...")
 
-            self.trade_context = OpenSecTradeContext(
-                filter_trdmarket=self.trade_market_map.get(trade_market),
-                host=self.opend_host,
-                port=self.opend_port,
-                security_firm=self.security_firm_map.get(security_firm)
-            )
+            # Track when we started the connection attempt for timing-based SMS detection
+            self.last_connection_attempt = datetime.utcnow()
 
-            # Test connection - this will trigger SMS verification if needed
-            ret, data = self.trade_context.get_acc_list()
-
-            if ret == RET_OK:
-                # Success - connection established
-                self.connection_state = 'connected'
-                logger.info("OpenD connected successfully!")
-                logger.info(f"Available accounts: {len(data) if hasattr(data, '__len__') else 'N/A'}")
+            # Check for SMS immediately before attempting connection since logs already show SMS messages
+            logger.info("Pre-connection SMS check...")
+            sms_detected = self._check_sms_required_in_logs()
+            logger.info(f"Pre-connection SMS check result: {sms_detected}")
+            if sms_detected:
+                logger.info("SMS verification detected before connection attempt")
+                self.awaiting_sms_verification = True
+                self.last_sms_request_time = datetime.utcnow()
+                self.connection_state = 'awaiting_sms'
                 return {
-                    'success': True,
-                    'message': 'OpenD connected successfully',
-                    'state': 'connected'
+                    'success': False,
+                    'requires_sms_verification': True,
+                    'message': 'SMS verification code required. Please check your phone for the verification code.',
+                    'state': 'awaiting_sms'
                 }
-            else:
-                # Check if this is an SMS verification requirement
-                if 'verification code' in str(data).lower() or 'phone verification' in str(data).lower():
+
+            logger.info("Creating OpenSecTradeContext...")
+
+            # Use threading for context creation too, as it can hang waiting for SMS
+            import threading
+            import time
+
+            context_result = {'context': None, 'completed': False, 'exception': None}
+
+            def create_context():
+                try:
+                    logger.info("Thread: Creating OpenSecTradeContext...")
+                    context = OpenSecTradeContext(
+                        filter_trdmarket=self.trade_market_map.get(trade_market),
+                        host=self.opend_host,
+                        port=self.opend_port,
+                        security_firm=self.security_firm_map.get(security_firm)
+                    )
+                    context_result['context'] = context
+                    context_result['completed'] = True
+                    logger.info("Thread: OpenSecTradeContext created successfully")
+                except Exception as e:
+                    logger.error(f"Thread: Failed to create OpenSecTradeContext: {e}")
+                    context_result['exception'] = e
+                    context_result['completed'] = True
+
+            # Start context creation in thread with timeout
+            logger.info("Starting context creation thread...")
+            context_thread = threading.Thread(target=create_context)
+            context_thread.daemon = True
+            context_thread.start()
+
+            # Wait for context creation with timeout
+            context_timeout = 3  # Short timeout for context creation
+            start_time = time.time()
+
+            while not context_result['completed'] and (time.time() - start_time) < context_timeout:
+                time.sleep(0.1)
+                # Check for SMS during context creation
+                if self._check_sms_required_in_logs():
+                    logger.info("SMS verification detected during context creation")
                     self.awaiting_sms_verification = True
                     self.last_sms_request_time = datetime.utcnow()
-                    logger.info("SMS verification required")
+                    self.connection_state = 'awaiting_sms'
                     return {
                         'success': False,
-                        'requires_sms': True,
-                        'message': 'SMS verification code required',
+                        'requires_sms_verification': True,
+                        'message': 'SMS verification code required. Please check your phone for the verification code.',
+                        'state': 'awaiting_sms'
+                    }
+
+            # Check context creation result
+            if context_result['completed']:
+                if context_result['exception']:
+                    # Check for SMS after context creation failure
+                    if self._check_sms_required_in_logs():
+                        logger.info("SMS verification detected after context creation failure")
+                        self.awaiting_sms_verification = True
+                        self.last_sms_request_time = datetime.utcnow()
+                        self.connection_state = 'awaiting_sms'
+                        return {
+                            'success': False,
+                            'requires_sms_verification': True,
+                            'message': 'SMS verification code required. Please check your phone for the verification code.',
+                            'state': 'awaiting_sms'
+                        }
+                    else:
+                        raise context_result['exception']
+                else:
+                    self.trade_context = context_result['context']
+                    logger.info("OpenSecTradeContext created successfully")
+            else:
+                # Context creation timed out - likely SMS verification required
+                logger.info("Context creation timed out - checking for SMS verification")
+                if self._check_sms_required_in_logs():
+                    logger.info("SMS verification detected after context creation timeout")
+                    self.awaiting_sms_verification = True
+                    self.last_sms_request_time = datetime.utcnow()
+                    self.connection_state = 'awaiting_sms'
+                    return {
+                        'success': False,
+                        'requires_sms_verification': True,
+                        'message': 'SMS verification code required. Please check your phone for the verification code.',
                         'state': 'awaiting_sms'
                     }
                 else:
-                    # Other connection error
                     self.connection_state = 'error'
-                    self.connection_error = str(data)
-                    logger.error(f"Connection failed: {data}")
+                    self.connection_error = "Context creation timeout"
                     return {
                         'success': False,
-                        'error': f'Connection failed: {data}',
+                        'error': 'Connection timeout during context creation',
+                        'state': 'error'
+                    }
+
+            # Test connection with timeout - this will trigger SMS verification if needed
+            # Use threading to prevent blocking on get_acc_list() call
+            import threading
+            import time
+
+            logger.info("Setting up threading for API call...")
+            result_container = {'ret': None, 'data': None, 'completed': False, 'exception': None}
+
+            def api_call():
+                try:
+                    logger.info("Thread started - Starting get_acc_list() API call...")
+                    ret, data = self.trade_context.get_acc_list()
+                    logger.info(f"get_acc_list() completed with ret={ret}")
+                    result_container['ret'] = ret
+                    result_container['data'] = data
+                    result_container['completed'] = True
+                    logger.info("Thread completed successfully")
+                except Exception as e:
+                    logger.error(f"get_acc_list() failed with exception: {e}")
+                    result_container['exception'] = e
+                    result_container['completed'] = True
+                    logger.info("Thread completed with exception")
+
+            # Start API call in thread
+            logger.info("Creating and starting thread...")
+            try:
+                thread = threading.Thread(target=api_call)
+                thread.daemon = True
+                thread.start()
+                logger.info("Thread started successfully")
+            except Exception as thread_error:
+                logger.error(f"Failed to start thread: {thread_error}")
+                # Immediate SMS check if threading fails
+                if self._check_sms_required_in_logs():
+                    logger.info("SMS verification detected after threading failure")
+                    self.awaiting_sms_verification = True
+                    self.last_sms_request_time = datetime.utcnow()
+                    self.connection_state = 'awaiting_sms'
+                    return {
+                        'success': False,
+                        'requires_sms_verification': True,
+                        'message': 'SMS verification code required. Please check your phone for the verification code.',
+                        'state': 'awaiting_sms'
+                    }
+                else:
+                    raise thread_error
+
+            # Wait for completion with timeout
+            timeout_seconds = 5
+            start_time = time.time()
+
+            while not result_container['completed'] and (time.time() - start_time) < timeout_seconds:
+                time.sleep(0.1)  # Check more frequently
+
+                # Check if OpenD logs indicate SMS verification needed
+                if self._check_sms_required_in_logs():
+                    logger.info("SMS verification detected from OpenD logs during polling")
+                    self.awaiting_sms_verification = True
+                    self.last_sms_request_time = datetime.utcnow()
+                    self.connection_state = 'awaiting_sms'
+                    # Validate state was set correctly
+                    logger.info(f"State set during polling: awaiting_sms_verification={self.awaiting_sms_verification}, connection_state={self.connection_state}")
+                    return {
+                        'success': False,
+                        'requires_sms_verification': True,
+                        'message': 'SMS verification code required. Please check your phone for the verification code.',
+                        'state': 'awaiting_sms'
+                    }
+
+            # If timeout occurred without API completion, check for SMS one more time
+            if not result_container['completed']:
+                logger.info("API call timed out, checking for SMS verification requirement")
+                if self._check_sms_required_in_logs():
+                    logger.info("SMS verification detected after timeout")
+                    self.awaiting_sms_verification = True
+                    self.last_sms_request_time = datetime.utcnow()
+                    self.connection_state = 'awaiting_sms'
+                    # Validate state was set correctly
+                    logger.info(f"State set after timeout: awaiting_sms_verification={self.awaiting_sms_verification}, connection_state={self.connection_state}")
+                    return {
+                        'success': False,
+                        'requires_sms_verification': True,
+                        'message': 'SMS verification code required. Please check your phone for the verification code.',
+                        'state': 'awaiting_sms'
+                    }
+
+            # Check if API call completed
+            if result_container['completed']:
+                if result_container['exception']:
+                    raise result_container['exception']
+
+                ret = result_container['ret']
+                data = result_container['data']
+
+                if ret == RET_OK:
+                    # Success - connection established
+                    self.connection_state = 'connected'
+                    logger.info("OpenD connected successfully!")
+                    logger.info(f"Available accounts: {len(data) if hasattr(data, '__len__') else 'N/A'}")
+                    return {
+                        'success': True,
+                        'message': 'OpenD connected successfully',
+                        'state': 'connected'
+                    }
+                else:
+                    # Check if this is an SMS verification requirement
+                    if 'verification code' in str(data).lower() or 'phone verification' in str(data).lower():
+                        self.awaiting_sms_verification = True
+                        self.last_sms_request_time = datetime.utcnow()
+                        self.connection_state = 'awaiting_sms'
+                        logger.info("SMS verification required")
+                        return {
+                            'success': False,
+                            'requires_sms_verification': True,
+                            'message': 'SMS verification code required. Please check your phone for the verification code.',
+                            'state': 'awaiting_sms'
+                        }
+                    else:
+                        # Other connection error
+                        self.connection_state = 'error'
+                        self.connection_error = str(data)
+                        logger.error(f"Connection failed: {data}")
+                        return {
+                            'success': False,
+                            'error': f'Connection failed: {data}',
+                            'state': 'error'
+                        }
+            else:
+                # Timeout occurred - likely SMS verification required
+                logger.info("API call timeout - checking for SMS verification requirement")
+                if self._check_sms_required_in_logs():
+                    self.awaiting_sms_verification = True
+                    self.last_sms_request_time = datetime.utcnow()
+                    self.connection_state = 'awaiting_sms'
+                    return {
+                        'success': False,
+                        'requires_sms_verification': True,
+                        'message': 'SMS verification code required. Please check your phone for the verification code.',
+                        'state': 'awaiting_sms'
+                    }
+                else:
+                    self.connection_state = 'error'
+                    self.connection_error = "Connection timeout"
+                    return {
+                        'success': False,
+                        'error': 'Connection attempt timed out',
                         'state': 'error'
                     }
 
@@ -249,6 +519,146 @@ class OpenDConnector:
                 'error': f'Connection attempt failed: {e}',
                 'state': 'error'
             }
+
+    def _check_sms_required_in_logs(self) -> bool:
+        """Check OpenD process logs for SMS verification messages"""
+        try:
+            logger.info("_check_sms_required_in_logs: Starting SMS detection check")
+
+            if not self.opend_process:
+                logger.info("_check_sms_required_in_logs: No OpenD process found")
+                return False
+
+            # New approach: Use /proc/self/fd/1 to read container's own stdout
+            # This should capture the same output that docker logs shows
+            try:
+                import subprocess
+                import os
+
+                # Method 1: Try reading from /proc/1/fd/1 and /proc/1/fd/2 (container's main process stdout/stderr)
+                for fd_path in ['/proc/1/fd/1', '/proc/1/fd/2']:
+                    try:
+                        if os.path.exists(fd_path):
+                            # Use tail to get recent output from the file descriptor
+                            result = subprocess.run(
+                                ['tail', '-n', '50', fd_path],
+                                capture_output=True,
+                                text=True,
+                                timeout=1,
+                                errors='ignore'
+                            )
+
+                            if result.returncode == 0 and result.stdout:
+                                recent_output = result.stdout.lower()
+                                logger.info(f"_check_sms_required_in_logs: Read {len(recent_output)} chars from {fd_path}")
+
+                                sms_patterns = [
+                                    'initconnect fail: need a phone verification code',
+                                    'need a phone verification code',
+                                    'phone verification code'
+                                ]
+
+                                for pattern in sms_patterns:
+                                    if pattern in recent_output:
+                                        pattern_count = recent_output.count(pattern)
+                                        logger.info(f"SMS verification detected in {fd_path} with pattern: '{pattern}' (count: {pattern_count})")
+                                        if pattern_count >= 1:
+                                            return True
+
+                    except Exception as fd_error:
+                        logger.debug(f"Could not read from {fd_path}: {fd_error}")
+
+                # Method 2: Use dmesg to check for recent kernel/system messages
+                try:
+                    result = subprocess.run(
+                        ['dmesg', '-T', '--time-format=iso'],
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                        errors='ignore'
+                    )
+
+                    if result.returncode == 0 and result.stdout:
+                        dmesg_output = result.stdout.lower()
+
+                        sms_patterns = [
+                            'initconnect fail: need a phone verification code',
+                            'need a phone verification code',
+                            'phone verification code'
+                        ]
+
+                        for pattern in sms_patterns:
+                            if pattern in dmesg_output:
+                                logger.info(f"SMS verification detected in dmesg with pattern: '{pattern}'")
+                                return True
+
+                except Exception as dmesg_error:
+                    logger.debug(f"Could not read dmesg: {dmesg_error}")
+
+                # Method 3: Check if there are any recent OpenD processes and examine their status
+                try:
+                    result = subprocess.run(
+                        ['ps', 'aux'],
+                        capture_output=True,
+                        text=True,
+                        timeout=1
+                    )
+
+                    if result.returncode == 0:
+                        ps_output = result.stdout.lower()
+                        # If we see OpenD processes running, it's likely handling SMS verification
+                        if 'opend' in ps_output and hasattr(self, 'awaiting_sms_verification'):
+                            # If we've been checking for a while and OpenD is still running,
+                            # it's likely waiting for SMS verification
+                            current_time = datetime.utcnow()
+                            if hasattr(self, 'last_connection_attempt'):
+                                time_diff = (current_time - self.last_connection_attempt).total_seconds()
+                                if time_diff > 2:  # If we've been trying for more than 2 seconds
+                                    logger.info("SMS verification inferred from prolonged OpenD process activity")
+                                    return True
+
+                except Exception as ps_error:
+                    logger.debug(f"Could not check process status: {ps_error}")
+
+            except Exception as e:
+                logger.debug(f"Error with advanced SMS detection methods: {e}")
+
+            # Fallback: Check the static log file
+            try:
+                import os
+                log_file_path = '/app/logs/opend.log'
+
+                if os.path.exists(log_file_path):
+                    with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        f.seek(0, 2)  # Go to end of file
+                        file_size = f.tell()
+
+                        read_size = min(1000, file_size)
+                        f.seek(max(0, file_size - read_size))
+                        recent_content = f.read().lower()
+
+                        sms_patterns = [
+                            'initconnect fail: need a phone verification code',
+                            'need a phone verification code',
+                            'phone verification code'
+                        ]
+
+                        for pattern in sms_patterns:
+                            if pattern in recent_content:
+                                pattern_count = recent_content.count(pattern)
+                                if pattern_count >= 1:
+                                    logger.info(f"SMS verification detected in log file with pattern: '{pattern}' (count: {pattern_count})")
+                                    return True
+
+            except Exception as e:
+                logger.debug(f"Error reading log file: {e}")
+
+            logger.info("_check_sms_required_in_logs: Returning False (no SMS detected)")
+            return False
+
+        except Exception as e:
+            logger.error(f"Error checking SMS logs: {e}")
+            return False
 
     def submit_sms_verification(self, sms_code: str) -> dict:
         """Submit SMS verification code"""

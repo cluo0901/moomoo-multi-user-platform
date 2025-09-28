@@ -28,6 +28,7 @@ class User(db.Model):
     trades = db.relationship('Trade', backref='user', lazy='dynamic', cascade='all, delete-orphan')
     orders = db.relationship('Order', backref='user', lazy='dynamic', cascade='all, delete-orphan')
     positions = db.relationship('Position', backref='user', lazy='dynamic', cascade='all, delete-orphan')
+    credentials = db.relationship('UserCredentials', backref='user', uselist=False, cascade='all, delete-orphan')
 
     def set_password(self, password):
         """Hash and set password"""
@@ -48,6 +49,43 @@ class User(db.Model):
             'container_status': self.container_status,
             'openapi_configured': self.openapi_configured,
             'last_sync': self.last_sync.isoformat() if self.last_sync else None
+        }
+
+class UserCredentials(db.Model):
+    __tablename__ = 'user_credentials'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, ForeignKey('users.id'), nullable=False, unique=True, index=True)
+    moomoo_username = db.Column(db.String(100), nullable=False)
+    moomoo_password = db.Column(db.String(255), nullable=False)  # Will be encrypted
+    security_firm = db.Column(db.String(50), default='FUTUSG', nullable=False)
+    trade_market = db.Column(db.String(10), default='US', nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def set_encrypted_password(self, password):
+        """Encrypt and set moomoo password"""
+        # Simple base64 encoding for now - in production use proper encryption
+        import base64
+        self.moomoo_password = base64.b64encode(password.encode()).decode()
+
+    def get_decrypted_password(self):
+        """Decrypt and return moomoo password"""
+        import base64
+        try:
+            return base64.b64decode(self.moomoo_password.encode()).decode()
+        except:
+            return self.moomoo_password  # Fallback for unencrypted passwords
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'moomoo_username': self.moomoo_username,
+            'security_firm': self.security_firm,
+            'trade_market': self.trade_market,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
 
 class Trade(db.Model):

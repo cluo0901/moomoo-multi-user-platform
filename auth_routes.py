@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from datetime import datetime, timedelta
-from models import db, User
+from models import db, User, UserCredentials
 from container_manager import ContainerManager
 
 auth_bp = Blueprint('auth', __name__)
@@ -254,6 +254,27 @@ def configure_opend():
         if not trade_market:
             return jsonify({'error': 'trade_market is required'}), 400
 
+        # Save credentials to database first
+        try:
+            # Get or create user credentials
+            credentials = UserCredentials.query.filter_by(user_id=user.id).first()
+            if not credentials:
+                credentials = UserCredentials(user_id=user.id)
+                db.session.add(credentials)
+
+            # Update credentials
+            credentials.moomoo_username = username
+            credentials.set_encrypted_password(password)
+            credentials.security_firm = security_firm
+            credentials.trade_market = trade_market
+
+            # Commit to database first
+            db.session.commit()
+
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'error': f'Failed to save credentials: {str(e)}'}), 500
+
         # Configure OpenD in container with real moomoo credentials
         result = container_mgr.configure_opend(
             user.container_id,
@@ -319,28 +340,44 @@ def connect_opend():
         if not user:
             return jsonify({'error': 'User not found'}), 404
 
-        if not user.openapi_configured:
+        # Check if user has credentials in database
+        credentials = UserCredentials.query.filter_by(user_id=user.id).first()
+        if not credentials:
             return jsonify({
                 'success': False,
                 'error': 'moomoo credentials not configured. Please configure your credentials in Settings first.',
                 'requires_config': True
             }), 400
 
+        # Ensure container manager has the latest credentials from database
+        try:
+            container_mgr.configure_opend(
+                user.container_id,
+                {
+                    'moomoo_username': credentials.moomoo_username,
+                    'moomoo_password': credentials.get_decrypted_password(),
+                    'security_firm': credentials.security_firm,
+                    'trade_market': credentials.trade_market
+                }
+            )
+        except Exception as e:
+            print(f"Warning: Failed to update container config: {e}")
+
         # Use container manager to initiate connection
         result = container_mgr.initiate_opend_connection(user.container_id)
 
-        if result.get('success'):
-            if result.get('requires_sms_verification'):
-                return jsonify({
-                    'success': True,
-                    'requires_sms_verification': True,
-                    'message': 'SMS verification required. Please check your phone for the verification code.'
-                })
-            else:
-                return jsonify({
-                    'success': True,
-                    'message': 'Connected to moomoo successfully!'
-                })
+        # Check for SMS verification requirement first (regardless of success flag)
+        if result.get('requires_sms_verification'):
+            return jsonify({
+                'success': True,
+                'requires_sms_verification': True,
+                'message': result.get('message', 'SMS verification required. Please check your phone for the verification code.')
+            })
+        elif result.get('success'):
+            return jsonify({
+                'success': True,
+                'message': 'Connected to moomoo successfully!'
+            })
         else:
             return jsonify({
                 'success': False,

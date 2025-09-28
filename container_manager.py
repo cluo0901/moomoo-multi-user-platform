@@ -356,7 +356,7 @@ class ContainerManager:
                 response = requests.post(
                     f"{container_url}/config",
                     json=connector_config,
-                    timeout=30
+                    timeout=20
                 )
 
                 if response.status_code == 200:
@@ -496,7 +496,7 @@ class ContainerManager:
                 return {'success': False, 'error': 'Container not accessible'}
 
             # Call the container's connect endpoint
-            response = requests.post(f"{container_url}/connect", timeout=30)
+            response = requests.post(f"{container_url}/connect", timeout=20)
 
             if response.status_code == 200:
                 data = response.json()
